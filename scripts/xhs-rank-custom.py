@@ -24,6 +24,7 @@ xhs-rank-custom.py
 """
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -33,6 +34,9 @@ from datetime import date
 import yaml
 
 TODAY = date.today()
+RESEARCH_DIR = os.path.expanduser(
+    os.environ.get("TOPIC_RANK_RESEARCH_DIR", "~/topic-rank-research")
+)
 
 XHS_HOT_CATEGORIES = [
     "fashion", "food", "cosmetics", "movie",
@@ -219,6 +223,7 @@ def main():
     parser.add_argument("--page", type=int, default=1, help="页码（默认 1，仅关键词模式有效；--within 模式下自动多翻页）")
     parser.add_argument("--no-time-weight", action="store_true", help="关闭时间加权（仅关键词模式有效）")
     parser.add_argument("--within", type=int, default=None, help="只看近 N 天内发布（自动多翻页抓取）")
+    parser.add_argument("--save", action="store_true", help="保存结果到 TOPIC_RANK_RESEARCH_DIR")
     args = parser.parse_args()
 
     if args.hot:
@@ -305,6 +310,22 @@ def main():
         print(f"    赞:{fmt(v['like'])}  藏:{fmt(v['fav'])}  评:{fmt(v['comment'])}  享:{fmt(v['share'])}  发布:{fmt_days(v['days'])}")
         print(f"    作者: {v['author']}  →  https://www.xiaohongshu.com/explore/{v['id']}")
         print()
+
+    if args.save:
+        today_str = TODAY.isoformat()
+        kw_slug = "+".join(args.keyword[:2]) if len(args.keyword) > 1 else args.keyword[0]
+        os.makedirs(RESEARCH_DIR, exist_ok=True)
+        filepath = os.path.join(RESEARCH_DIR, f"{kw_slug}-小红书-{today_str}.md")
+        md = [f"# {kw_display} — 小红书 — {today_str}", "", f"> 模式：{args.score} [{mode_tag}]  |  Top {len(top)}", ""]
+        for i, v in enumerate(top, 1):
+            score_str = f"{v['score']:.1f}/天" if time_weight else f"{v['score']:.0f}分"
+            url = f"https://www.xiaohongshu.com/explore/{v['id']}"
+            md += [f"{i}. **{v['title'][:40]}**  `{score_str}`",
+                   f"   赞:{fmt(v['like'])}  藏:{fmt(v['fav'])}  评:{fmt(v['comment'])}  享:{fmt(v['share'])}",
+                   f"   作者: {v['author']} → [{url}]({url})", ""]
+        with open(filepath, "w") as f:
+            f.write("\n".join(md))
+        print(f"\n已保存：{filepath}")
 
 
 if __name__ == "__main__":

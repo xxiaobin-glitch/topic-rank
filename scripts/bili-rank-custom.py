@@ -30,7 +30,13 @@ import subprocess
 
 import yaml
 
+import os
+from datetime import date
+
 TODAY_TS = time.time()
+RESEARCH_DIR = os.path.expanduser(
+    os.environ.get("TOPIC_RANK_RESEARCH_DIR", "~/topic-rank-research")
+)
 
 
 def search_bilibili(keyword: str, n: int, page: int) -> list[dict]:
@@ -142,6 +148,7 @@ def main():
     parser.add_argument("--page", type=int, default=1, help="搜索页码（默认 1，仅关键词模式有效）")
     parser.add_argument("--no-time-weight", action="store_true", help="关闭时间加权（仅关键词模式有效）")
     parser.add_argument("--within", type=int, default=None, help="只看近 N 天内发布（自动加大抓取量）")
+    parser.add_argument("--save", action="store_true", help="保存结果到 TOPIC_RANK_RESEARCH_DIR")
     args = parser.parse_args()
 
     if args.hot:
@@ -251,6 +258,27 @@ def main():
         print(f"    播:{v['view']//10000:.1f}万  赞:{fmt_int(v['like'])}  币:{fmt_int(v['coin'])}  藏:{fmt_int(v['fav'])}  享:{fmt_int(v['share'])}  评:{fmt_int(v['reply'])}  发布:{days_str}")
         print(f"    UP: {v['up']}  →  {v['url']}")
         print()
+
+    if args.save:
+        today = date.today().isoformat()
+        kw_slug = "+".join(args.keyword[:2]) if len(args.keyword) > 1 else args.keyword[0]
+        os.makedirs(RESEARCH_DIR, exist_ok=True)
+        filepath = os.path.join(RESEARCH_DIR, f"{kw_slug}-B站-{today}.md")
+        md = [f"# {kw_display} — B站 — {today}", "", f"> 模式：{args.score} [{mode_tag}]  |  Top {len(top)}", ""]
+        for i, v in enumerate(top, 1):
+            days_str = f"{int(v['days'])}天前" if v["days"] >= 1 else f"{int(v['days']*24)}小时前"
+            if args.score == "engagement_rate":
+                s = f"{v['score']:.2f}‰"
+            elif time_weight:
+                s = f"{v['score']:.1f}/天"
+            else:
+                s = f"{v['score']:.0f}分"
+            md += [f"{i}. **{v['title'][:38]}**  `{s}`",
+                   f"   播:{v['view']//10000:.1f}万  赞:{fmt_int(v['like'])}  币:{fmt_int(v['coin'])}  藏:{fmt_int(v['fav'])}  发布:{days_str}",
+                   f"   UP: {v['up']} → [{v['url']}]({v['url']})", ""]
+        with open(filepath, "w") as f:
+            f.write("\n".join(md))
+        print(f"\n已保存：{filepath}")
 
 
 if __name__ == "__main__":

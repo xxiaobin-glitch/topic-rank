@@ -122,19 +122,22 @@ def parse_top_creators(output: str, platform_key: str) -> list[dict]:
         if m:
             rank = int(m.group(1))
             score_str = m.group(2)
-            title = m.group(3).strip()
-            author_line = lines[i + 2].strip() if i + 2 < len(lines) else ""
-            author = re.sub(r"→.*", "", author_line)
-            author = re.sub(r"作者:|UP:", "", author).strip()
-            url_match = re.search(r"https?://\S+", author_line)
-            url = url_match.group(0) if url_match else ""
-            # 解析分数数值（去掉单位）
+            # 向前扫描找作者行，跳过多行标题、数据行等
+            author = ""
+            url = ""
+            for j in range(i + 1, min(i + 10, len(lines))):
+                candidate = lines[j].strip()
+                if re.match(r"(作者:|UP:)", candidate):
+                    author = re.sub(r"→.*", "", candidate)
+                    author = re.sub(r"作者:|UP:", "", author).strip()
+                    url_match = re.search(r"https?://\S+", candidate)
+                    url = url_match.group(0) if url_match else ""
+                    break
             score_val = re.search(r"[\d.]+", score_str)
             score = float(score_val.group(0)) if score_val else 0.0
             creators.append({
                 "rank": rank, "score": score, "score_str": score_str,
-                "title": title, "author": author, "url": url,
-                "platform": platform_key,
+                "author": author, "url": url, "platform": platform_key,
             })
     return creators
 

@@ -38,6 +38,10 @@ from datetime import date, datetime
 
 TODAY_TS = time.time()
 
+RESEARCH_DIR = os.path.expanduser(
+    os.environ.get("TOPIC_RANK_RESEARCH_DIR", "~/topic-rank-research")
+)
+
 MEDIACRAWLER_DIR = os.path.expanduser(
     os.environ.get("MEDIACRAWLER_DIR", "~/Projects/MediaCrawler")
 )
@@ -217,6 +221,7 @@ def main():
         dest="time_filter",
         help="时间过滤：0=不限（默认）, 1=1天内, 7=1周内, 180=6个月内",
     )
+    parser.add_argument("--save", action="store_true", help="保存结果到 TOPIC_RANK_RESEARCH_DIR")
     args = parser.parse_args()
 
     # --hot 模式：仍用 opencli（热点词来自话题榜，MediaCrawler 不提供）
@@ -290,6 +295,27 @@ def main():
         print(f"    赞:{fmt(liked)}  藏:{fmt(collected)}  评:{fmt(comments)}  享:{fmt(shared)}  发布:{fmt_days(ts)}")
         print(f"    作者: {v.get('nickname', '')}  →  {build_url(v)}")
         print()
+
+    if args.save:
+        today = date.today().isoformat()
+        kw_slug = "+".join(args.keyword[:2]) if len(args.keyword) > 1 else args.keyword[0]
+        os.makedirs(RESEARCH_DIR, exist_ok=True)
+        filepath = os.path.join(RESEARCH_DIR, f"{kw_slug}-抖音-{today}.md")
+        lines = [f"# {kw_display} — 抖音 — {today}",
+                 f"", f"> 模式：{args.score} [{mode_tag}]  |  Top {len(top)}", ""]
+        for i, v in enumerate(top, 1):
+            score_str = f"{v['score']:.1f}/天" if time_weight else f"{v['score']:.0f}分"
+            title = (v.get("title") or v.get("desc") or "")[:42]
+            liked = int(v.get("liked_count") or 0)
+            collected = int(v.get("collected_count") or 0)
+            comments = int(v.get("comment_count") or 0)
+            shared = int(v.get("share_count") or 0)
+            lines += [f"{i}. **{title}**  `{score_str}`",
+                      f"   赞:{fmt(liked)}  藏:{fmt(collected)}  评:{fmt(comments)}  享:{fmt(shared)}",
+                      f"   作者: {v.get('nickname', '')} → [{build_url(v)}]({build_url(v)})", ""]
+        with open(filepath, "w") as f:
+            f.write("\n".join(lines))
+        print(f"\n已保存：{filepath}")
 
 
 if __name__ == "__main__":
