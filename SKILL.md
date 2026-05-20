@@ -100,6 +100,12 @@ python3 ~/.claude/skills/topic-rank/scripts/rank.py "AI视频" --within 10
 python3 ~/.claude/skills/topic-rank/scripts/rank.py "手机摄影" --platforms xhs --no-time-weight --score virality
 ```
 
+**多关键词合并（覆盖不挂标签的创作者）：**
+用户：「查抖音 AI短片 和 ai创作浪潮计划 近7天」
+```bash
+python3 ~/.claude/skills/topic-rank/scripts/rank.py "AI短片" "ai创作浪潮计划" --platforms dy --within 7
+```
+
 **watchlist：**
 用户：「查一下 watchlist」
 ```bash
