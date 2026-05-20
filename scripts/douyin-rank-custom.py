@@ -50,7 +50,7 @@ VALID_TIME_FILTERS = {0, 1, 7, 180}  # MediaCrawler PUBLISH_TIME_TYPE 支持的�
 BASE_CONFIG_PATH = os.path.join(MEDIACRAWLER_DIR, "config", "base_config.py")
 
 
-def patch_configs(publish_time_type: int) -> tuple[str, str]:
+def patch_configs(publish_time_type: int, max_notes: int) -> tuple[str, str]:
     """临时改写两个 config 文件，返回原始内容用于恢复。"""
     with open(DY_CONFIG_PATH) as f:
         dy_orig = f.read()
@@ -62,11 +62,15 @@ def patch_configs(publish_time_type: int) -> tuple[str, str]:
         f"PUBLISH_TIME_TYPE = {publish_time_type}",
         dy_orig, flags=re.MULTILINE,
     )
-    # 让 MediaCrawler 自己启动 Chrome（使用 browser_data/ 里保存的登录状态）
     base_patched = re.sub(
         r"^CDP_CONNECT_EXISTING\s*=\s*\w+",
         "CDP_CONNECT_EXISTING = False",
         base_orig, flags=re.MULTILINE,
+    )
+    base_patched = re.sub(
+        r"^CRAWLER_MAX_NOTES_COUNT\s*=\s*\d+",
+        f"CRAWLER_MAX_NOTES_COUNT = {max_notes}",
+        base_patched, flags=re.MULTILINE,
     )
 
     with open(DY_CONFIG_PATH, "w") as f:
@@ -84,9 +88,10 @@ def restore_configs(dy_orig: str, base_orig: str) -> None:
         f.write(base_orig)
 
 
-def run_mediacrawler(keyword: str, publish_time_type: int) -> bool:
+def run_mediacrawler(keyword: str, publish_time_type: int, time_filter_active: bool) -> bool:
     """运行 MediaCrawler 关键词搜索，返回是否成功。"""
-    dy_orig, base_orig = patch_configs(publish_time_type)
+    max_notes = 45 if time_filter_active else 15
+    dy_orig, base_orig = patch_configs(publish_time_type, max_notes)
     try:
         cmd = [
             "python3", os.path.join(MEDIACRAWLER_DIR, "main.py"),
@@ -232,8 +237,10 @@ def main():
     time_weight = not args.no_time_weight
     time_label = {0: "不限", 1: "1天内", 7: "1周内", 180: "6个月内"}[args.time_filter]
 
-    print(f"\n运行 MediaCrawler 搜索「{args.keyword}」（时间范围：{time_label}）...\n")
-    ok = run_mediacrawler(args.keyword, args.time_filter)
+    time_filter_active = args.time_filter != 0
+    fetch_n = 45 if time_filter_active else 15
+    print(f"\n运行 MediaCrawler 搜索「{args.keyword}」（时间范围：{time_label}，抓取 {fetch_n} 条）...\n")
+    ok = run_mediacrawler(args.keyword, args.time_filter, time_filter_active)
     if not ok:
         sys.exit(1)
 
