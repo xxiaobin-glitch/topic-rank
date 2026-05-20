@@ -88,8 +88,11 @@ def restore_configs(dy_orig: str, base_orig: str) -> None:
         f.write(base_orig)
 
 
+TIME_FILTER_SECONDS = {1: 86400, 7: 7 * 86400, 180: 180 * 86400}
+
+
 def run_mediacrawler(keyword: str, publish_time_type: int, time_filter_active: bool) -> bool:
-    """运行 MediaCrawler 关键词搜索，返回是否成功。"""
+    """运行 MediaCrawler 单关键词搜索，返回是否成功。"""
     max_notes = 45 if time_filter_active else 15
     dy_orig, base_orig = patch_configs(publish_time_type, max_notes)
     try:
@@ -100,7 +103,6 @@ def run_mediacrawler(keyword: str, publish_time_type: int, time_filter_active: b
             "--type", "search",
             "--keywords", keyword,
         ]
-        # 不捕获输出，让 MediaCrawler 进度直接打印到终端
         result = subprocess.run(cmd, cwd=MEDIACRAWLER_DIR, timeout=300)
         if result.returncode != 0:
             print("[错误] MediaCrawler 运行失败", file=sys.stderr)
@@ -110,12 +112,11 @@ def run_mediacrawler(keyword: str, publish_time_type: int, time_filter_active: b
         restore_configs(dy_orig, base_orig)
 
 
-def read_today_jsonl(keyword: str) -> list[dict]:
-    """读取今天的 JSONL，过滤出 source_keyword 匹配的记录。"""
+def read_today_jsonl(keywords: list[str], time_filter: int) -> list[dict]:
+    """读取今天的 JSONL，合并所有关键词匹配的记录，按 time_filter 过滤发布时间。"""
     today = date.today().isoformat()
     jsonl_path = os.path.join(JSONL_DIR, f"search_contents_{today}.jsonl")
     if not os.path.exists(jsonl_path):
-        # 找最新的文件
         files = sorted(
             [f for f in os.listdir(JSONL_DIR) if f.startswith("search_contents_") and f.endswith(".jsonl")],
             reverse=True,
@@ -125,8 +126,11 @@ def read_today_jsonl(keyword: str) -> list[dict]:
             return []
         jsonl_path = os.path.join(JSONL_DIR, files[0])
 
-    seen = set()
-    records = []
+    kw_lower = [k.lower() for k in keywords]
+    cutoff = (TODAY_TS - TIME_FILTER_SECONDS[time_filter]) if time_filter > 0 else 0
+
+    seen: set[str] = set()
+    records: list[dict] = []
     with open(jsonl_path) as f:
         for line in f:
             line = line.strip()
@@ -134,7 +138,10 @@ def read_today_jsonl(keyword: str) -> list[dict]:
                 continue
             try:
                 item = json.loads(line)
-                if keyword.lower() not in (item.get("source_keyword") or "").lower():
+                src_kw = (item.get("source_keyword") or "").lower()
+                if not any(kw in src_kw for kw in kw_lower):
+                    continue
+                if cutoff and (item.get("create_time") or 0) < cutoff:
                     continue
                 aweme_id = item.get("aweme_id")
                 if aweme_id and aweme_id not in seen:
@@ -196,7 +203,7 @@ def build_url(v: dict) -> str:
 
 def main():
     parser = argparse.ArgumentParser(description="抖音关键词视频排名（MediaCrawler）")
-    parser.add_argument("keyword", nargs="?", help="搜索关键词（--hot 模式下可省略）")
+    parser.add_argument("keyword", nargs="*", help="搜索关键词，支持多个（--hot 模式下可省略）")
     parser.add_argument("--hot", action="store_true", help="拉取热点词 Top 10（仅词条列表，无视频）")
     parser.add_argument(
         "--score", choices=["value", "virality", "engagement"],
@@ -236,15 +243,17 @@ def main():
 
     time_weight = not args.no_time_weight
     time_label = {0: "不限", 1: "1天内", 7: "1周内", 180: "6个月内"}[args.time_filter]
+    kw_display = " + ".join(args.keyword)
 
     time_filter_active = args.time_filter != 0
     fetch_n = 45 if time_filter_active else 15
-    print(f"\n运行 MediaCrawler 搜索「{args.keyword}」（时间范围：{time_label}，抓取 {fetch_n} 条）...\n")
-    ok = run_mediacrawler(args.keyword, args.time_filter, time_filter_active)
-    if not ok:
-        sys.exit(1)
+    for kw in args.keyword:
+        print(f"\n运行 MediaCrawler 搜索「{kw}」（时间范围：{time_label}，抓取 {fetch_n} 条）...\n")
+        ok = run_mediacrawler(kw, args.time_filter, time_filter_active)
+        if not ok:
+            sys.exit(1)
 
-    videos = read_today_jsonl(args.keyword)
+    videos = read_today_jsonl(args.keyword, args.time_filter)
     if not videos:
         print("[错误] 未从 JSONL 中找到匹配记录", file=sys.stderr)
         sys.exit(1)
@@ -266,7 +275,7 @@ def main():
 
     print(f"{'='*62}")
     print(f"  排名模式：{SCORE_LABELS[args.score]}  [{mode_tag}]")
-    print(f"  关键词：{args.keyword}  |  有效视频 {len(videos)} 条  |  Top {len(top)}")
+    print(f"  关键词：{kw_display}  |  有效视频 {len(videos)} 条  |  Top {len(top)}")
     print(f"{'='*62}\n")
 
     for i, v in enumerate(top, 1):

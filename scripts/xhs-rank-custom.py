@@ -190,7 +190,7 @@ def fmt_days(d: float) -> str:
 
 def main():
     parser = argparse.ArgumentParser(description="小红书话题排名 / 平台热榜")
-    parser.add_argument("keyword", nargs="?", help="搜索关键词（--hot 模式下可省略）")
+    parser.add_argument("keyword", nargs="*", help="搜索关键词，支持多个（--hot 模式下可省略）")
     parser.add_argument("--hot", action="store_true", help="拉取平台热榜，不需要关键词")
     parser.add_argument(
         "--category",
@@ -243,20 +243,32 @@ def main():
         parser.error("请提供关键词，或使用 --hot 查看热榜")
 
     time_weight = not args.no_time_weight
+    kw_display = " + ".join(args.keyword)
 
-    if args.within:
-        print(f"\n搜索「{args.keyword}」（近{args.within}天，类型:{args.type} 排序:{args.sort}，翻 3 页）...\n")
-        raw_items = []
-        for pg in range(1, 4):
-            if pg > 1:
-                time.sleep(1.5)
-            page_items = search_xhs(args.keyword, args.sort, args.type, pg)
-            raw_items.extend(page_items)
-            print(f"  第 {pg} 页拿到 {len(page_items)} 条")
-        print()
-    else:
-        print(f"\n搜索「{args.keyword}」（类型:{args.type} 排序:{args.sort} 页:{args.page}）...\n")
-        raw_items = search_xhs(args.keyword, args.sort, args.type, args.page)
+    seen_ids: set[str] = set()
+    raw_items: list[dict] = []
+
+    for kw in args.keyword:
+        if args.within:
+            print(f"\n搜索「{kw}」（近{args.within}天，类型:{args.type} 排序:{args.sort}，翻 3 页）...\n")
+            for pg in range(1, 4):
+                if pg > 1:
+                    time.sleep(1.5)
+                page_items = search_xhs(kw, args.sort, args.type, pg)
+                for item in page_items:
+                    item_id = item.get("id") or item.get("note_id", "")
+                    if item_id and item_id not in seen_ids:
+                        seen_ids.add(item_id)
+                        raw_items.append(item)
+                print(f"  第 {pg} 页拿到 {len(page_items)} 条")
+            print()
+        else:
+            print(f"\n搜索「{kw}」（类型:{args.type} 排序:{args.sort} 页:{args.page}）...\n")
+            for item in search_xhs(kw, args.sort, args.type, args.page):
+                item_id = item.get("id") or item.get("note_id", "")
+                if item_id and item_id not in seen_ids:
+                    seen_ids.add(item_id)
+                    raw_items.append(item)
 
     print(f"拿到 {len(raw_items)} 条原始结果，过滤话题卡片、解析中...\n")
 
@@ -283,7 +295,7 @@ def main():
         mode_tag = "时间加权"
     print(f"{'='*62}")
     print(f"  排名模式：{SCORE_LABELS[args.score]}  [{mode_tag}]")
-    print(f"  关键词：{args.keyword}  |  有效笔记 {len(results)} 条  |  Top {len(top)}")
+    print(f"  关键词：{kw_display}  |  有效笔记 {len(results)} 条  |  Top {len(top)}")
     print(f"{'='*62}\n")
 
     for i, v in enumerate(top, 1):

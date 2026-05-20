@@ -128,7 +128,7 @@ def fmt_int(n: int) -> str:
 
 def main():
     parser = argparse.ArgumentParser(description="B站话题排名 / 全站排行榜")
-    parser.add_argument("keyword", nargs="?", help="搜索关键词（--hot 模式下可省略）")
+    parser.add_argument("keyword", nargs="*", help="搜索关键词，支持多个（--hot 模式下可省略）")
     parser.add_argument("--hot", action="store_true", help="拉取全站排行榜，不需要关键词")
     parser.add_argument("--day", type=int, choices=[3, 7], default=3, help="排行周期：3 或 7 天（默认 3，仅 --hot 有效）")
     parser.add_argument(
@@ -195,10 +195,18 @@ def main():
 
     time_weight = not args.no_time_weight
     fetch_n = args.fetch * 3 if args.within else args.fetch
-    print(f"\n搜索「{args.keyword}」，抓取 {fetch_n} 条，补全数据中...\n")
+    kw_display = " + ".join(args.keyword)
+    print(f"\n搜索「{kw_display}」，每词抓取 {fetch_n} 条，补全数据中...\n")
 
-    videos_raw = search_bilibili(args.keyword, fetch_n, args.page)
-    print(f"找到 {len(videos_raw)} 条有效视频，正在逐一查询完整数据...\n")
+    seen_bvids: set[str] = set()
+    videos_raw = []
+    for kw in args.keyword:
+        for v in search_bilibili(kw, fetch_n, args.page):
+            if v["bvid"] not in seen_bvids:
+                seen_bvids.add(v["bvid"])
+                videos_raw.append(v)
+
+    print(f"找到 {len(videos_raw)} 条有效视频（去重后），正在逐一查询完整数据...\n")
 
     results = []
     for i, v in enumerate(videos_raw, 1):
@@ -228,7 +236,7 @@ def main():
 
     print(f"\n{'='*65}")
     print(f"  排名模式：{label}  [{mode_tag}]")
-    print(f"  关键词：{args.keyword}  |  共 {len(results)} 条  |  显示 Top {len(top)}")
+    print(f"  关键词：{kw_display}  |  共 {len(results)} 条  |  显示 Top {len(top)}")
     print(f"{'='*65}\n")
 
     for i, v in enumerate(top, 1):

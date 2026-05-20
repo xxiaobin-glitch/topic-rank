@@ -45,10 +45,10 @@ def within_to_time_filter(within: int) -> int:
     return 0
 
 
-def run_platform(platform: str, script: str, keyword: str, score: str, top: int, no_time_weight: bool, within: int | None) -> tuple[str, bool]:
+def run_platform(platform: str, script: str, keyword: list[str], score: str, top: int, no_time_weight: bool, within: int | None) -> tuple[str, bool]:
     """Run a platform script and return (stdout, success)."""
-    cmd = ["python3", os.path.join(TOOLS_DIR, script), keyword,
-           "--score", score, "--top", str(top)]
+    cmd = ["python3", os.path.join(TOOLS_DIR, script)] + keyword + \
+          ["--score", score, "--top", str(top)]
     if no_time_weight:
         cmd.append("--no-time-weight")
     if within:
@@ -210,7 +210,7 @@ def print_suggestions(platform_results: list[tuple[str, str, str, bool]], keywor
 
 def main():
     parser = argparse.ArgumentParser(description="三平台话题排行，合并存档")
-    parser.add_argument("keyword", help="搜索关键词")
+    parser.add_argument("keyword", nargs="+", help="搜索关键词，支持多个（结果合并去重）")
     parser.add_argument(
         "--platforms", nargs="+", choices=["dy", "bili", "xhs"],
         default=["dy", "bili", "xhs"],
@@ -227,6 +227,8 @@ def main():
     args = parser.parse_args()
 
     today = date.today().isoformat()
+    kw_display = " + ".join(args.keyword)
+    kw_filename = args.keyword[0] if len(args.keyword) == 1 else "+".join(args.keyword[:2])
     if args.within and args.no_time_weight:
         mode_tag = f"近{args.within}天·绝对数字"
     elif args.no_time_weight:
@@ -236,12 +238,12 @@ def main():
     else:
         mode_tag = "时间加权"
     print(f"\n{'='*55}")
-    print(f"  话题：{args.keyword}  |  模式：{args.score} [{mode_tag}]")
+    print(f"  话题：{kw_display}  |  模式：{args.score} [{mode_tag}]")
     print(f"  平台：{' / '.join(args.platforms)}  |  每平台 Top {args.top}")
     print(f"{'='*55}\n")
 
     md_sections = [
-        f"# {args.keyword} — {today}",
+        f"# {kw_display} — {today}",
         f"",
         f"> 模式：{args.score} [{mode_tag}]  |  平台：{' / '.join(args.platforms)}  |  Top {args.top}",
         f"",
@@ -264,7 +266,7 @@ def main():
         return
 
     os.makedirs(RESEARCH_DIR, exist_ok=True)
-    filename = f"{args.keyword}-{today}.md"
+    filename = f"{kw_filename}-{today}.md"
     filepath = os.path.join(RESEARCH_DIR, filename)
     with open(filepath, "w") as f:
         f.write("\n".join(md_sections))
