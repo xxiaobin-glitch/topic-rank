@@ -100,8 +100,10 @@ def run_mediacrawler(keyword: str, publish_time_type: int, time_filter_active: b
     max_notes = 45 if time_filter_active else 15
     dy_orig, base_orig = patch_configs(publish_time_type, max_notes)
     try:
+        venv_python = os.path.join(MEDIACRAWLER_DIR, ".venv", "bin", "python3")
+        python_bin = venv_python if os.path.exists(venv_python) else "python3"
         cmd = [
-            "python3", os.path.join(MEDIACRAWLER_DIR, "main.py"),
+            python_bin, os.path.join(MEDIACRAWLER_DIR, "main.py"),
             "--platform", "dy",
             "--lt", "cookie",
             "--type", "search",

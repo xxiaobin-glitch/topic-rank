@@ -24,14 +24,13 @@ xhs-rank-custom.py
 """
 
 import argparse
+import json
 import os
 import re
 import subprocess
 import sys
 import time
 from datetime import date
-
-import yaml
 
 TODAY = date.today()
 RESEARCH_DIR = os.path.expanduser(
@@ -45,26 +44,26 @@ XHS_HOT_CATEGORIES = [
 
 
 def search_xhs(keyword: str, sort: str, note_type: str, page: int) -> list[dict]:
-    args = ["xhs", "search", keyword, "--yaml", "--sort", sort, "--page", str(page)]
+    args = ["xhs", "search", keyword, "--json", "--sort", sort, "--page", str(page)]
     if note_type != "all":
         args += ["--type", note_type]
     result = subprocess.run(args, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"[错误] xhs search 失败: {result.stderr}", file=sys.stderr)
         sys.exit(1)
-    data = yaml.safe_load(result.stdout)
+    data = json.loads(result.stdout)
     return data.get("data", {}).get("items", [])
 
 
 def hot_xhs(category: str | None) -> list[dict]:
-    args = ["xhs", "hot", "--yaml"]
+    args = ["xhs", "hot", "--json"]
     if category:
         args += ["--category", category]
     result = subprocess.run(args, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"[错误] xhs hot 失败: {result.stderr}", file=sys.stderr)
         sys.exit(1)
-    data = yaml.safe_load(result.stdout)
+    data = json.loads(result.stdout)
     return data.get("data", {}).get("items", [])
 
 

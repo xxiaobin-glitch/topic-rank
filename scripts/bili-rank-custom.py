@@ -28,8 +28,6 @@ import time
 import urllib.request
 import subprocess
 
-import yaml
-
 import os
 from datetime import date
 
@@ -42,26 +40,26 @@ RESEARCH_DIR = os.path.expanduser(
 def search_bilibili(keyword: str, n: int, page: int) -> list[dict]:
     result = subprocess.run(
         ["bili", "search", keyword, "--type", "video", "-n", str(n),
-         "--page", str(page), "--yaml"],
+         "--page", str(page), "--json"],
         capture_output=True, text=True
     )
     if result.returncode != 0:
         print(f"[错误] bili search 失败: {result.stderr}", file=sys.stderr)
         sys.exit(1)
-    data = yaml.safe_load(result.stdout)
+    data = json.loads(result.stdout)
     videos = data.get("data", [])
     return [v for v in videos if v.get("bvid")]
 
 
 def hot_bilibili(day: int, n: int) -> list[dict]:
     result = subprocess.run(
-        ["bili", "rank", "--day", str(day), "-n", str(n), "--yaml"],
+        ["bili", "rank", "--day", str(day), "-n", str(n), "--json"],
         capture_output=True, text=True
     )
     if result.returncode != 0:
         print(f"[错误] bili rank 失败: {result.stderr}", file=sys.stderr)
         sys.exit(1)
-    data = yaml.safe_load(result.stdout)
+    data = json.loads(result.stdout)
     return data.get("data", {}).get("items", [])
 
 

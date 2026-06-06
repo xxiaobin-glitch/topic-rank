@@ -53,6 +53,9 @@ python3 ~/.claude/skills/topic-rank/scripts/watchlist.py [参数]
 | 近 N 天、最近 N 天、近期 | `--within N` |
 | 只看 Top 5 / Top 20 等 | `--top N` |
 | 只看看，不存、不保存 | `--no-save` |
+| 值不值得做、要不要做、还知不知道接着做、要不要继续、判断一下、研究一下选题 | `--compare` |
+
+`--compare` 触发1天+7天联查，自动生成对比分析，帮助做选题决策。不指定 `--within` 时使用此模式。
 
 存档默认存到 `~/topic-rank-research/`。若想改存档目录，设置环境变量 `TOPIC_RANK_RESEARCH_DIR`。
 
@@ -64,6 +67,9 @@ python3 ~/.claude/skills/topic-rank/scripts/watchlist.py [参数]
 | 拉多一点 / 最近 30 条 | `--limit 30` |
 | 看 Top 10 | `--top 10` |
 | 只看某人，如「只查李让」 | `--name 编导李让` |
+| 只看某个赛道，如「只看爽文类」 | `--category "爽文·反道德绑架"` |
+| 有哪些分类 / 分了几个类 | `--list-categories` |
+| 把某人加进 watchlist | `--add --name "名字" --sec-uid <uid> --category "分类名" [--note "备注"]` |
 
 ## 执行步骤
 
@@ -104,6 +110,12 @@ python3 ~/.claude/skills/topic-rank/scripts/rank.py "手机摄影" --platforms x
 用户：「查抖音 AI短片 和 ai创作浪潮计划 近7天」
 ```bash
 python3 ~/.claude/skills/topic-rank/scripts/rank.py "AI短片" "ai创作浪潮计划" --platforms dy --within 7
+```
+
+**选题决策联查：**
+用户：「拒绝道德绑架相关，看看还知不知道接着做」
+```bash
+python3 ~/.claude/skills/topic-rank/scripts/rank.py "拒绝道德绑架" "末世先杀圣母" --platforms dy --compare
 ```
 
 **watchlist：**

@@ -133,11 +133,17 @@ def parse_top_creators(output: str, platform_key: str) -> list[dict]:
                     url_match = re.search(r"https?://\S+", candidate)
                     url = url_match.group(0) if url_match else ""
                     break
+            title = m.group(3).strip()
             score_val = re.search(r"[\d.]+", score_str)
             score = float(score_val.group(0)) if score_val else 0.0
+            sec_uid = ""
+            if url:
+                uid_match = re.search(r"/user/([^?&\s]+)", url)
+                sec_uid = uid_match.group(1) if uid_match else ""
             creators.append({
                 "rank": rank, "score": score, "score_str": score_str,
-                "author": author, "url": url, "platform": platform_key,
+                "title": title, "author": author, "url": url,
+                "platform": platform_key, "sec_uid": sec_uid,
             })
     return creators
 
@@ -177,7 +183,8 @@ def print_suggestions(platform_results: list[tuple[str, str, str, bool]], keywor
         if not success or key not in by_platform:
             continue
         top = by_platform[key][0]
-        line = f"  {label}：{top['author']} 「{top['title'][:20]}…」 {top['score_str']}"
+        title = top.get('title') or top.get('name') or ''
+        line = f"  {label}：{top['author']} 「{title[:20]}…」 {top['score_str']}"
         lines.append(line)
         md_lines.append(line)
 
@@ -202,9 +209,169 @@ def print_suggestions(platform_results: list[tuple[str, str, str, bool]], keywor
             line = f"  [{plat} #{c['rank']}] {c['author']}  {c['score_str']}  {c['url']}"
             lines.append(line)
             md_lines.append(line)
+        lines += ["", "→ 存入 watchlist（替换分类名后执行）："]
+        for c in unique_suggestions:
+            if c.get("sec_uid"):
+                cmd = f"  python3 ~/.claude/skills/topic-rank/scripts/watchlist.py --add --name \"{c['author']}\" --sec-uid {c['sec_uid']} --category \"分类名\""
+                lines.append(cmd)
     else:
         lines.append("\n本次 Top 3 作者均已在 watchlist 中。")
         md_lines.append("\n本次 Top 3 作者均已在 watchlist 中。")
+
+    lines.append("─" * 55)
+    print("\n".join(lines))
+    return "\n".join(md_lines)
+
+
+def run_query(keyword: list[str], platforms: list[str], score: str, top: int,
+              no_time_weight: bool, within: int | None) -> tuple[list, list[str], str]:
+    """单次查询，返回 (platform_results, md_sections, suggest_md)。"""
+    kw_display = " + ".join(keyword)
+    if within and no_time_weight:
+        mode_tag = f"近{within}天·绝对数字"
+    elif no_time_weight:
+        mode_tag = "历史最高"
+    elif within:
+        mode_tag = f"近{within}天·时间加权"
+    else:
+        mode_tag = "时间加权"
+
+    print(f"\n{'='*55}")
+    print(f"  话题：{kw_display}  |  模式：{score} [{mode_tag}]")
+    print(f"  平台：{' / '.join(platforms)}  |  每平台 Top {top}")
+    print(f"{'='*55}\n")
+
+    md_sections = [
+        f"> 模式：{score} [{mode_tag}]  |  平台：{' / '.join(platforms)}  |  Top {top}",
+        "",
+    ]
+
+    platform_results = []
+    for key in platforms:
+        label, script = PLATFORM_SCRIPTS[key]
+        print(f"--- {label} ---")
+        output, success = run_platform(key, script, keyword, score, top, no_time_weight, within)
+        print(output)
+        block = extract_results_block(output)
+        md_sections.append(results_to_markdown(label, block, success))
+        platform_results.append((key, label, output, success))
+
+    suggest_md = print_suggestions(platform_results, keyword)
+    md_sections.append(suggest_md)
+    return platform_results, md_sections, suggest_md
+
+
+def parse_total_count(output: str) -> int:
+    """从平台脚本输出中提取"有效视频 N 条"的总数。"""
+    m = re.search(r"有效视频\s+(\d+)\s+条", output)
+    return int(m.group(1)) if m else 0
+
+
+def generate_compare_analysis(results_1d: list, results_7d: list) -> str:
+    """根据两次查询结果生成对比分析，回答三个创作决策问题。"""
+    creators_1d: list[dict] = []
+    creators_7d: list[dict] = []
+    vol_1d = 0
+    vol_7d = 0
+    for key, label, output, success in results_1d:
+        if success:
+            creators_1d.extend(parse_top_creators(output, key))
+            vol_1d += parse_total_count(output)
+    for key, label, output, success in results_7d:
+        if success:
+            creators_7d.extend(parse_top_creators(output, key))
+            vol_7d += parse_total_count(output)
+
+    if vol_1d == 0:
+        vol_1d = len(creators_1d)
+    if vol_7d == 0:
+        vol_7d = len(creators_7d)
+    ratio = vol_7d / vol_1d if vol_1d > 0 else 0
+
+    lines = ["\n" + "─" * 55, "  选题分析", "─" * 55, ""]
+    md_lines = ["## 选题分析", ""]
+
+    # --- Q1：赛道现在处于什么阶段？---
+    lines.append("【赛道阶段】")
+    md_lines.append("### 赛道阶段")
+    top1d = max(creators_1d, key=lambda c: c["score"], default=None)
+    top7d = max(creators_7d, key=lambda c: c["score"], default=None)
+
+    if ratio < 3:
+        if top7d and top7d["score"] > 5000:
+            stage = f"起势期——7天头部已有爆款（{top7d['author']} {top7d['score_str']}），但近1天跟进内容不多，说明赛道刚被验证，还没大量涌入，现在入场时机好"
+        else:
+            stage = f"观察期——7天头部得分不高，话题热度有限，谨慎跟进"
+    elif ratio < 8:
+        stage = f"活跃期——1天 {vol_1d} 条 / 7天 {vol_7d} 条，持续有新内容涌入，赛道竞争开始但未饱和"
+    else:
+        stage = f"退潮期——7天内容量是1天的 {ratio:.0f} 倍，高峰已过，跟进风险较大"
+
+    lines.append(f"  {stage}")
+    md_lines.append(stage)
+    md_lines.append("")
+
+    # --- Q2：什么内容格式在跑量？---
+    lines.append("")
+    lines.append("【跑量格式】")
+    md_lines.append("### 跑量格式")
+
+    # 从7天 top 内容里提取格式信号
+    format_signals = []
+    for c in creators_7d[:10]:
+        title = c.get("title", "")
+        tags = re.findall(r"#(\S+?)(?=\s|#|$)", title)
+        format_signals.extend(tags)
+
+    # 检测 AI 标签
+    ai_creators = [c for c in creators_7d[:10] if re.search(r"#ai|#aigc|#AI", c.get("title", ""), re.I)]
+    ai_count = len(ai_creators)
+
+    # 高收藏率内容（留存型）
+    high_save = [c for c in creators_7d[:10] if c["score"] > 3000]
+
+    if ai_count > 0:
+        ai_line = f"7天 Top10 中有 {ai_count} 条明确标注 AI（{' / '.join(c['author'] for c in ai_creators[:3])}），AI 制作已被算法接受"
+        lines.append(f"  {ai_line}")
+        md_lines.append(ai_line)
+
+    if high_save:
+        top_titles = "、".join(f"「{c.get('title','')[:15]}」" for c in high_save[:3])
+        save_line = f"得分 3000+ 的内容：{top_titles}——末世具体场景+爽感直给是主流公式"
+        lines.append(f"  {save_line}")
+        md_lines.append(save_line)
+    md_lines.append("")
+
+    # --- Q3：差异化切入点 ---
+    lines.append("")
+    lines.append("【差异化空间】")
+    md_lines.append("### 差异化空间")
+
+    authors_1d = {c["author"] for c in creators_1d[:5] if c["author"]}
+    authors_7d_top = {c["author"] for c in creators_7d[:5] if c["author"]}
+    overlap = authors_1d & authors_7d_top
+
+    if overlap:
+        overlap_line = f"持续产出者：{'、'.join(overlap)}——头部已有稳定创作者，差异化要在角度或形式上找，不能照搬"
+    else:
+        overlap_line = "1天和7天 Top5 无重叠——头部未固化，跑量靠内容质量而非账号积累，入场门槛低"
+    lines.append(f"  {overlap_line}")
+    md_lines.append(overlap_line)
+
+    # watchlist 建议（只在终端输出，不进文件）
+    all_top = creators_1d[:3] + creators_7d[:3]
+    seen: set[str] = set()
+    watchlist = load_watchlist_names()
+    suggestions = []
+    for c in all_top:
+        if c["author"] and c["author"] not in seen and c["author"].lower() not in watchlist and c.get("sec_uid"):
+            seen.add(c["author"])
+            suggestions.append(c)
+
+    if suggestions:
+        lines += ["", "→ 存入 watchlist（替换分类名后执行）："]
+        for c in suggestions:
+            lines.append(f"  python3 ~/.claude/skills/topic-rank/scripts/watchlist.py --add --name \"{c['author']}\" --sec-uid {c['sec_uid']} --category \"分类名\"")
 
     lines.append("─" * 55)
     print("\n".join(lines))
@@ -225,13 +392,52 @@ def main():
     )
     parser.add_argument("--top", type=int, default=10, help="每平台显示 Top N（默认 10）")
     parser.add_argument("--no-time-weight", action="store_true", help="关闭时间加权")
-    parser.add_argument("--within", type=int, default=None, help="只看近 N 天内发布的内容（自动加大抓取量）")
+    parser.add_argument("--within", type=int, default=None, help="只看近 N 天内发布的内容")
     parser.add_argument("--no-save", action="store_true", help="只打印，不保存文件")
+    parser.add_argument("--compare", action="store_true", help="1天+7天联查，生成对比分析（用于选题决策）")
     args = parser.parse_args()
 
     today = date.today().isoformat()
     kw_display = " + ".join(args.keyword)
     kw_filename = args.keyword[0] if len(args.keyword) == 1 else "+".join(args.keyword[:2])
+
+    if args.compare:
+        print(f"\n{'#'*55}")
+        print(f"  选题研究模式：{kw_display}  |  1天 + 7天联查")
+        print(f"{'#'*55}")
+
+        print(f"\n\n{'━'*55}  1天数据  {'━'*55}\n")
+        results_1d, md_1d, _ = run_query(args.keyword, args.platforms, args.score, args.top, args.no_time_weight, 1)
+
+        print(f"\n\n{'━'*55}  7天数据  {'━'*55}\n")
+        top_7d = max(args.top, 20)
+        results_7d, md_7d, _ = run_query(args.keyword, args.platforms, args.score, top_7d, args.no_time_weight, 7)
+
+        compare_md = generate_compare_analysis(results_1d, results_7d)
+
+        if not args.no_save:
+            os.makedirs(RESEARCH_DIR, exist_ok=True)
+            filename = f"{today}-{kw_filename}.md"
+            filepath = os.path.join(RESEARCH_DIR, filename)
+            # md_1d 和 md_7d 的最后一段是"分析与建议"（watchlist 操作提示），存档时去掉
+            def strip_suggestions(sections: list[str]) -> list[str]:
+                for i, s in enumerate(sections):
+                    if s.startswith("## 分析与建议"):
+                        return sections[:i]
+                return sections
+            with open(filepath, "w") as f:
+                f.write(f"# {kw_display} — {today}\n\n")
+                f.write("> 选题研究模式：1天 + 7天联查\n\n")
+                f.write("## 1天 Top 10\n\n")
+                f.write("\n".join(strip_suggestions(md_1d)))
+                f.write(f"\n\n## 7天 Top 20\n\n")
+                f.write("\n".join(strip_suggestions(md_7d)))
+                f.write("\n\n")
+                f.write(compare_md)
+            print(f"\n已保存：{filepath}")
+        return
+
+    # 普通单次查询
     if args.within and args.no_time_weight:
         mode_tag = f"近{args.within}天·绝对数字"
     elif args.no_time_weight:
@@ -269,7 +475,7 @@ def main():
         return
 
     os.makedirs(RESEARCH_DIR, exist_ok=True)
-    filename = f"{kw_filename}-{today}.md"
+    filename = f"{today}-{kw_filename}.md"
     filepath = os.path.join(RESEARCH_DIR, filename)
     with open(filepath, "w") as f:
         f.write("\n".join(md_sections))
