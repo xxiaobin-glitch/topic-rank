@@ -31,7 +31,7 @@ import argparse
 
 # 常用意图词 → 候选词组展开表
 REQUIRE_EXPAND: dict[str, list[str]] = {
-    "ai":   ["AI", "AIGC", "ai短片", "ai创作浪潮计划", "即梦", "可灵", "seedance", "kling", "runway", "sora", "ai漫剧", "ai创意", "ai生成"],
+    "ai":   ["AI", "AIGC", "ai短片", "ai创作浪潮计划", "即梦", "可灵", "seedance", "kling", "ai漫剧", "ai生成", "抖音AI浪潮计划", "未来导演扶持计划"],
     "电影": ["电影", "电影感", "影视", "微电影", "短片", "cinematic"],
     "爱情": ["爱情", "恋爱", "情侣", "CP", "虐恋", "甜宠"],
     "搞笑": ["搞笑", "喜剧", "沙雕", "整活", "反转"],
