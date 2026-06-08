@@ -28,6 +28,30 @@ import json
 import os
 import re
 import subprocess
+
+REQUIRE_EXPAND: dict[str, list[str]] = {
+    "ai":   ["AI", "AIGC", "ai短片", "ai创作浪潮计划", "即梦", "可灵", "seedance", "kling", "runway", "sora", "ai漫剧", "ai创意", "ai生成"],
+    "电影": ["电影", "电影感", "影视", "微电影", "短片", "cinematic"],
+    "爱情": ["爱情", "恋爱", "情侣", "CP", "虐恋", "甜宠"],
+    "搞笑": ["搞笑", "喜剧", "沙雕", "整活", "反转"],
+    "励志": ["励志", "逆袭", "正能量", "奋斗", "坚持"],
+}
+
+def expand_require(terms: list[str]) -> list[list[str]]:
+    result = []
+    for t in terms:
+        expanded = REQUIRE_EXPAND.get(t.lower(), [t])
+        result.append([kw.lower() for kw in expanded])
+    return result
+
+def passes_require(video: dict, require_groups: list[list[str]]) -> bool:
+    if not require_groups:
+        return True
+    text = (video.get("title") or "").lower()
+    for group in require_groups:
+        if not any(kw in text for kw in group):
+            return False
+    return True
 import sys
 import time
 from datetime import date
@@ -223,6 +247,10 @@ def main():
     parser.add_argument("--no-time-weight", action="store_true", help="关闭时间加权（仅关键词模式有效）")
     parser.add_argument("--within", type=int, default=None, help="只看近 N 天内发布（自动多翻页抓取）")
     parser.add_argument("--save", action="store_true", help="保存结果到 TOPIC_RANK_RESEARCH_DIR")
+    parser.add_argument(
+        "--require", nargs="+", default=None, metavar="TERM",
+        help="结果过滤：只保留标题含指定词的视频，多个词为 AND 逻辑；'ai' 自动展开为 AI 工具词组",
+    )
     args = parser.parse_args()
 
     if args.hot:
@@ -285,6 +313,12 @@ def main():
 
     if args.within:
         results = [r for r in results if r["days"] <= args.within]
+
+    if args.require:
+        require_groups = expand_require(args.require)
+        before = len(results)
+        results = [v for v in results if passes_require(v, require_groups)]
+        print(f"[过滤] --require {args.require}：{len(results)}/{before} 条通过")
 
     results.sort(key=lambda x: x["score"], reverse=True)
     top = results[: args.top]

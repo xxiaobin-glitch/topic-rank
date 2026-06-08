@@ -54,6 +54,13 @@ python3 ~/.claude/skills/topic-rank/scripts/watchlist.py [参数]
 | 只看 Top 5 / Top 20 等 | `--top N` |
 | 只看看，不存、不保存 | `--no-save` |
 | 值不值得做、要不要做、还知不知道接着做、要不要继续、判断一下、研究一下选题 | `--compare` |
+| 和 AI 相关的、AI 做的、AI 制作 | `--require ai` |
+| 和电影相关的、电影感 | `--require 电影` |
+| 和爱情相关的 | `--require 爱情` |
+| 和搞笑相关的 | `--require 搞笑` |
+| 同时满足多个领域，如"AI 做的电影感" | `--require ai 电影` |
+
+`--require` 说明：在抓回来的结果里二次过滤，只保留标题含指定词的视频。`ai` 会自动展开为完整 AI 工具词组（即梦、可灵、Seedance、AIGC 等），其他词如「电影」也会展开为同义词（电影感、影视、cinematic 等）。多个词之间是 AND 逻辑（每个词都要满足）。
 
 `--compare` 触发1天+7天联查，自动生成对比分析，帮助做选题决策。不指定 `--within` 时使用此模式。
 

@@ -28,6 +28,15 @@ douyin-rank-custom.py
 """
 
 import argparse
+
+# 常用意图词 → 候选词组展开表
+REQUIRE_EXPAND: dict[str, list[str]] = {
+    "ai":   ["AI", "AIGC", "ai短片", "ai创作浪潮计划", "即梦", "可灵", "seedance", "kling", "runway", "sora", "ai漫剧", "ai创意", "ai生成"],
+    "电影": ["电影", "电影感", "影视", "微电影", "短片", "cinematic"],
+    "爱情": ["爱情", "恋爱", "情侣", "CP", "虐恋", "甜宠"],
+    "搞笑": ["搞笑", "喜剧", "沙雕", "整活", "反转"],
+    "励志": ["励志", "逆袭", "正能量", "奋斗", "坚持"],
+}
 import json
 import os
 import re
@@ -158,6 +167,26 @@ def read_today_jsonl(keywords: list[str], time_filter: int) -> list[dict]:
     return records
 
 
+def expand_require(terms: list[str]) -> list[list[str]]:
+    """把每个 require 词展开为候选词组（AND 组之间，OR 组内）。"""
+    result = []
+    for t in terms:
+        expanded = REQUIRE_EXPAND.get(t.lower(), [t])
+        result.append([kw.lower() for kw in expanded])
+    return result
+
+
+def passes_require(video: dict, require_groups: list[list[str]]) -> bool:
+    """视频在每个 require 组中至少匹配一个词才通过。"""
+    if not require_groups:
+        return True
+    text = (video.get("title") or "").lower()
+    for group in require_groups:
+        if not any(kw in text for kw in group):
+            return False
+    return True
+
+
 def compute_score(v: dict, mode: str, time_weight: bool) -> float:
     ts = v.get("create_time", 0)
     days = max((TODAY_TS - ts) / 86400, 1) if ts else 30
@@ -224,6 +253,10 @@ def main():
         help="时间过滤：0=不限（默认）, 1=1天内, 7=1周内, 180=6个月内",
     )
     parser.add_argument("--save", action="store_true", help="保存结果到 TOPIC_RANK_RESEARCH_DIR")
+    parser.add_argument(
+        "--require", nargs="+", default=None, metavar="TERM",
+        help="结果过滤：只保留标题含指定词的视频，多个词为 AND 逻辑；'ai' 自动展开为 AI 工具词组",
+    )
     args = parser.parse_args()
 
     # --hot 模式：仍用 opencli（热点词来自话题榜，MediaCrawler 不提供）
@@ -264,6 +297,15 @@ def main():
     if not videos:
         print("[错误] 未从 JSONL 中找到匹配记录", file=sys.stderr)
         sys.exit(1)
+
+    if args.require:
+        require_groups = expand_require(args.require)
+        before = len(videos)
+        videos = [v for v in videos if passes_require(v, require_groups)]
+        print(f"[过滤] --require {args.require}：{len(videos)}/{before} 条通过")
+        if not videos:
+            print("[错误] --require 过滤后无结果，尝试放宽条件", file=sys.stderr)
+            sys.exit(1)
 
     for v in videos:
         v["score"] = compute_score(v, args.score, time_weight)
