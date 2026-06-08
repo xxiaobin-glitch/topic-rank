@@ -383,7 +383,7 @@ def main():
 
     for i, v in enumerate(top, 1):
         score_str = f"{v['score']:.1f}/天" if time_weight else f"{v['score']:.0f}分"
-        title = (v.get("title") or v.get("desc") or "")[:42]
+        title = (v.get("title") or v.get("desc") or "").replace("\n", " ")[:42]
         liked = int(v.get("liked_count") or 0)
         collected = int(v.get("collected_count") or 0)
         comments = int(v.get("comment_count") or 0)
@@ -403,7 +403,7 @@ def main():
                  f"", f"> 模式：{args.score} [{mode_tag}]  |  Top {len(top)}", ""]
         for i, v in enumerate(top, 1):
             score_str = f"{v['score']:.1f}/天" if time_weight else f"{v['score']:.0f}分"
-            title = (v.get("title") or v.get("desc") or "")[:42]
+            title = (v.get("title") or v.get("desc") or "").replace("\n", " ")[:42]
             liked = int(v.get("liked_count") or 0)
             collected = int(v.get("collected_count") or 0)
             comments = int(v.get("comment_count") or 0)
