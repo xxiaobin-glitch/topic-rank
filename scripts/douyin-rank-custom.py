@@ -109,7 +109,7 @@ def run_mediacrawler(keyword: str, publish_time_type: int, time_filter_active: b
             "--type", "search",
             "--keywords", keyword,
         ]
-        result = subprocess.run(cmd, cwd=MEDIACRAWLER_DIR, timeout=300)
+        result = subprocess.run(cmd, cwd=MEDIACRAWLER_DIR, timeout=600)
         if result.returncode != 0:
             print("[错误] MediaCrawler 运行失败", file=sys.stderr)
             return False
