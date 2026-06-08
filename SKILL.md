@@ -58,9 +58,13 @@ python3 ~/.claude/skills/topic-rank/scripts/watchlist.py [参数]
 | 和电影相关的、电影感 | `--require 电影` |
 | 和爱情相关的 | `--require 爱情` |
 | 和搞笑相关的 | `--require 搞笑` |
+| 和高考相关的 | `--require 高考` |
 | 同时满足多个领域，如"AI 做的电影感" | `--require ai 电影` |
+| 想过滤得更精准、减少混入、语义相关 | `--llm-filter "主题描述"` |
 
-`--require` 说明：在抓回来的结果里二次过滤，只保留标题含指定词的视频。`ai` 会自动展开为完整 AI 工具词组（即梦、可灵、Seedance、AIGC 等），其他词如「电影」也会展开为同义词（电影感、影视、cinematic 等）。多个词之间是 AND 逻辑（每个词都要满足）。
+`--require` 说明：在抓回来的结果里二次过滤，只保留标题含指定词的视频。`ai` 会自动展开为完整 AI 工具词组（即梦、可灵、Seedance、AIGC 等），`高考` 会展开为考生、高三、备考、金榜等同义词，其他词如「电影」也会展开为同义词。多个词之间是 AND 逻辑（每个词都要满足）。
+
+`--llm-filter "主题描述"` 说明：只对抖音生效。在关键词过滤后，取评分最高的 40 条送给 DeepSeek 做语义判断，过滤掉标题虽含关键词但实际不相关的混入内容。比关键词过滤精准，能识别"考生""寒窗"等隐晦表达。需要设置环境变量 `DEEPSEEK_API_KEY`。建议和 `--require` 配合使用：先用关键词粗筛，再用 LLM 精筛。
 
 `--compare` 触发1天+7天联查，自动生成对比分析，帮助做选题决策。不指定 `--within` 时使用此模式。
 
@@ -123,6 +127,12 @@ python3 ~/.claude/skills/topic-rank/scripts/rank.py "AI短片" "ai创作浪潮�
 用户：「拒绝道德绑架相关，看看还知不知道接着做」
 ```bash
 python3 ~/.claude/skills/topic-rank/scripts/rank.py "拒绝道德绑架" "末世先杀圣母" --platforms dy --compare
+```
+
+**LLM 精筛（减少混入）：**
+用户：「查抖音 高考 AI短片，过滤精准一点」
+```bash
+python3 ~/.claude/skills/topic-rank/scripts/rank.py "高考" "ai短片" --platforms dy --require ai --llm-filter "高考相关的AI制作视频"
 ```
 
 **watchlist：**

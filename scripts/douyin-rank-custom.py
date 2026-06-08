@@ -36,6 +36,7 @@ REQUIRE_EXPAND: dict[str, list[str]] = {
     "爱情": ["爱情", "恋爱", "情侣", "CP", "虐恋", "甜宠"],
     "搞笑": ["搞笑", "喜剧", "沙雕", "整活", "反转"],
     "励志": ["励志", "逆袭", "正能量", "奋斗", "坚持"],
+    "高考": ["高考", "考生", "高三", "备考", "金榜", "题名", "上岸", "志愿", "填报"],
 }
 import json
 import os
@@ -187,6 +188,51 @@ def passes_require(video: dict, require_groups: list[list[str]]) -> bool:
     return True
 
 
+def llm_filter_videos(videos: list[dict], topic: str, candidate_n: int = 40) -> list[dict]:
+    """用 DeepSeek API 对候选视频标题做语义相关性过滤。取已排序的前 candidate_n 条送审。"""
+    import urllib.request
+
+    api_key = os.environ.get("DEEPSEEK_API_KEY")
+    if not api_key:
+        print("[LLM过滤] 未设置 DEEPSEEK_API_KEY，跳过语义过滤", file=sys.stderr)
+        return videos
+
+    candidates = videos[:candidate_n]
+    items_text = "\n".join(
+        f"{i}. {(v.get('title') or v.get('desc') or '')[:80]}"
+        for i, v in enumerate(candidates)
+    )
+    prompt = (
+        f'你是内容筛选助手。判断下列抖音视频标题是否与"{topic}"相关。\n'
+        f'只返回JSON数组，格式：[{{"id":0,"ok":true}},...]，不要其他内容。\n\n'
+        f'{items_text}'
+    )
+    payload = json.dumps({
+        "model": "deepseek-chat",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0,
+    }).encode()
+    req = urllib.request.Request(
+        "https://api.deepseek.com/chat/completions",
+        data=payload,
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read())
+        content = data["choices"][0]["message"]["content"].strip()
+        content = re.sub(r"^```[^\n]*\n?", "", content)
+        content = re.sub(r"\n?```$", "", content.strip())
+        results = json.loads(content)
+        relevant_ids = {r["id"] for r in results if r.get("ok")}
+        filtered = [v for i, v in enumerate(candidates) if i in relevant_ids]
+        print(f"[LLM过滤] {len(filtered)}/{len(candidates)} 条通过（主题：{topic}）")
+        return filtered if filtered else candidates
+    except Exception as e:
+        print(f"[LLM过滤] 调用失败，跳过：{e}", file=sys.stderr)
+        return videos
+
+
 def compute_score(v: dict, mode: str, time_weight: bool) -> float:
     ts = v.get("create_time", 0)
     days = max((TODAY_TS - ts) / 86400, 1) if ts else 30
@@ -257,6 +303,10 @@ def main():
         "--require", nargs="+", default=None, metavar="TERM",
         help="结果过滤：只保留标题含指定词的视频，多个词为 AND 逻辑；'ai' 自动展开为 AI 工具词组",
     )
+    parser.add_argument(
+        "--llm-filter", default=None, metavar="TOPIC", dest="llm_filter",
+        help="用 DeepSeek LLM 对结果做语义过滤，参数为主题描述，如'高考相关的AI视频'",
+    )
     args = parser.parse_args()
 
     # --hot 模式：仍用 opencli（热点词来自话题榜，MediaCrawler 不提供）
@@ -311,6 +361,10 @@ def main():
         v["score"] = compute_score(v, args.score, time_weight)
 
     videos.sort(key=lambda x: x["score"], reverse=True)
+
+    if args.llm_filter:
+        videos = llm_filter_videos(videos, args.llm_filter)
+
     top = videos[: args.top]
 
     if args.time_filter and not time_weight:

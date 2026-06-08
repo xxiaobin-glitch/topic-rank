@@ -46,7 +46,8 @@ def within_to_time_filter(within: int) -> int:
 
 
 def run_platform(platform: str, script: str, keyword: list[str], score: str, top: int,
-                 no_time_weight: bool, within: int | None, require: list[str] | None = None) -> tuple[str, bool]:
+                 no_time_weight: bool, within: int | None, require: list[str] | None = None,
+                 llm_filter: str | None = None) -> tuple[str, bool]:
     """Run a platform script and return (stdout, success)."""
     cmd = ["python3", os.path.join(TOOLS_DIR, script)] + keyword + \
           ["--score", score, "--top", str(top)]
@@ -59,6 +60,8 @@ def run_platform(platform: str, script: str, keyword: list[str], score: str, top
             cmd.extend(["--within", str(within)])
     if require:
         cmd.extend(["--require"] + require)
+    if llm_filter and platform == "dy":
+        cmd.extend(["--llm-filter", llm_filter])
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         return f"[错误] {result.stderr.strip()}", False
@@ -228,7 +231,8 @@ def print_suggestions(platform_results: list[tuple[str, str, str, bool]], keywor
 
 def run_query(keyword: list[str], platforms: list[str], score: str, top: int,
               no_time_weight: bool, within: int | None,
-              require: list[str] | None = None) -> tuple[list, list[str], str]:
+              require: list[str] | None = None,
+              llm_filter: str | None = None) -> tuple[list, list[str], str]:
     """单次查询，返回 (platform_results, md_sections, suggest_md)。"""
     kw_display = " + ".join(keyword)
     if within and no_time_weight:
@@ -254,7 +258,7 @@ def run_query(keyword: list[str], platforms: list[str], score: str, top: int,
     for key in platforms:
         label, script = PLATFORM_SCRIPTS[key]
         print(f"--- {label} ---")
-        output, success = run_platform(key, script, keyword, score, top, no_time_weight, within, require)
+        output, success = run_platform(key, script, keyword, score, top, no_time_weight, within, require, llm_filter)
         print(output)
         block = extract_results_block(output)
         md_sections.append(results_to_markdown(label, block, success))
@@ -403,6 +407,10 @@ def main():
         "--require", nargs="+", default=None, metavar="TERM",
         help="结果过滤：只保留标题含指定词的视频，多个词为 AND 逻辑；'ai' 自动展开为 AI 工具词组",
     )
+    parser.add_argument(
+        "--llm-filter", default=None, metavar="TOPIC", dest="llm_filter",
+        help="用 DeepSeek LLM 对抖音结果做语义过滤，参数为主题描述，如'高考相关的AI视频'",
+    )
     args = parser.parse_args()
 
     today = date.today().isoformat()
@@ -415,11 +423,11 @@ def main():
         print(f"{'#'*55}")
 
         print(f"\n\n{'━'*55}  1天数据  {'━'*55}\n")
-        results_1d, md_1d, _ = run_query(args.keyword, args.platforms, args.score, args.top, args.no_time_weight, 1, args.require)
+        results_1d, md_1d, _ = run_query(args.keyword, args.platforms, args.score, args.top, args.no_time_weight, 1, args.require, args.llm_filter)
 
         print(f"\n\n{'━'*55}  7天数据  {'━'*55}\n")
         top_7d = max(args.top, 20)
-        results_7d, md_7d, _ = run_query(args.keyword, args.platforms, args.score, top_7d, args.no_time_weight, 7, args.require)
+        results_7d, md_7d, _ = run_query(args.keyword, args.platforms, args.score, top_7d, args.no_time_weight, 7, args.require, args.llm_filter)
 
         compare_md = generate_compare_analysis(results_1d, results_7d)
 
@@ -470,7 +478,7 @@ def main():
     for key in args.platforms:
         label, script = PLATFORM_SCRIPTS[key]
         print(f"--- {label} ---")
-        output, success = run_platform(key, script, args.keyword, args.score, args.top, args.no_time_weight, args.within, args.require)
+        output, success = run_platform(key, script, args.keyword, args.score, args.top, args.no_time_weight, args.within, args.require, args.llm_filter)
         print(output)
         block = extract_results_block(output)
         md_sections.append(results_to_markdown(label, block, success))
