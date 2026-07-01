@@ -275,6 +275,84 @@ def parse_total_count(output: str) -> int:
     return int(m.group(1)) if m else 0
 
 
+def parse_publish_days(stats_line: str) -> int | None:
+    """从统计行提取发布天数，如'发布:5天前'→5。"""
+    m = re.search(r"发布:(\d+)天前", stats_line)
+    if m:
+        return int(m.group(1))
+    if "今天" in stats_line:
+        return 0
+    return None
+
+
+def analyze_trend(output_180d: str) -> str:
+    """从6个月数据分析发布时间分布，判断话题趋势。"""
+    lines = output_180d.splitlines()
+    entries = []
+    for i, line in enumerate(lines):
+        m = re.match(r"\s*(\d+)\.\s+\[(.+?)\]\s+(.*)", line)
+        if m:
+            score_str = m.group(2)
+            score_val = re.search(r"[\d.]+", score_str)
+            score = float(score_val.group(0)) if score_val else 0.0
+            for j in range(i + 1, min(i + 5, len(lines))):
+                days = parse_publish_days(lines[j])
+                if days is not None:
+                    entries.append({"days": days, "score": score})
+                    break
+
+    if not entries:
+        return ""
+
+    bucket_defs = [("0-7天", 0, 7), ("8-14天", 8, 14), ("15-21天", 15, 21), ("22-30天", 22, 30), ("31天+", 31, 9999)]
+    bucket_scores: dict[str, list[float]] = {name: [] for name, _, _ in bucket_defs}
+    for e in entries:
+        for name, lo, hi in bucket_defs:
+            if lo <= e["days"] <= hi:
+                bucket_scores[name].append(e["score"])
+                break
+
+    bucket_stats = {}
+    for name, _, _ in bucket_defs:
+        scores = bucket_scores[name]
+        if scores:
+            bucket_stats[name] = {"count": len(scores), "avg": sum(scores) / len(scores), "max": max(scores)}
+
+    recent_avg = bucket_stats.get("0-7天", {}).get("avg", 0)
+    peak_bucket = max(
+        [k for k in ["8-14天", "15-21天", "22-30天", "31天+"] if k in bucket_stats],
+        key=lambda k: bucket_stats[k]["avg"],
+        default=None,
+    )
+    peak_avg = bucket_stats[peak_bucket]["avg"] if peak_bucket else 0
+
+    if recent_avg == 0 and peak_avg > 0:
+        trend, trend_desc = "衰退期", f"近7天几乎无新爆款，峰值在{peak_bucket}（均分{peak_avg:.0f}），话题已过热度高峰"
+    elif peak_avg == 0:
+        trend, trend_desc = "上升期", "热度集中在近7天，话题正在起势"
+    elif recent_avg >= peak_avg * 0.7:
+        trend, trend_desc = "活跃期", f"近7天均分（{recent_avg:.0f}）与历史峰值接近，话题仍在活跃期"
+    elif recent_avg >= peak_avg * 0.3:
+        trend, trend_desc = "退温期", f"近7天均分（{recent_avg:.0f}）明显低于峰值（{peak_avg:.0f}，{peak_bucket}），话题热度在退温"
+    else:
+        trend, trend_desc = "衰退期", f"近7天均分（{recent_avg:.0f}）远低于峰值（{peak_avg:.0f}，{peak_bucket}），话题已过高峰"
+
+    out_lines = ["\n" + "─" * 55, "  趋势分析（6个月分布）", "─" * 55, "", "发布时间分布："]
+    md_lines = ["## 趋势分析", "", "| 时间段 | 视频数 | 均分 | 最高分 |", "|--------|--------|------|--------|"]
+
+    for name, _, _ in bucket_defs:
+        if name in bucket_stats:
+            s = bucket_stats[name]
+            out_lines.append(f"  {name}：{s['count']}条  均分{s['avg']:.0f}  最高{s['max']:.0f}")
+            md_lines.append(f"| {name} | {s['count']}条 | {s['avg']:.0f} | {s['max']:.0f} |")
+
+    out_lines += ["", f"【趋势判断】{trend}", f"  {trend_desc}", "─" * 55]
+    md_lines += ["", f"**【趋势判断】{trend}**", "", trend_desc]
+
+    print("\n".join(out_lines))
+    return "\n".join(md_lines)
+
+
 def generate_compare_analysis(results_1d: list, results_7d: list) -> str:
     """根据两次查询结果生成对比分析，回答三个创作决策问题。"""
     creators_1d: list[dict] = []
@@ -431,11 +509,20 @@ def main():
 
         compare_md = generate_compare_analysis(results_1d, results_7d)
 
+        # 趋势分析：额外跑抖音6个月数据，只用于时间分布分析
+        trend_md = ""
+        if "dy" in args.platforms:
+            print(f"\n\n{'━'*55}  趋势分析  {'━'*55}\n")
+            print("正在抓取6个月分布数据（仅用于趋势判断）...")
+            _, script_dy = PLATFORM_SCRIPTS["dy"]
+            output_180d, success_180d = run_platform("dy", script_dy, args.keyword, args.score, 45, True, 180, args.require)
+            if success_180d:
+                trend_md = analyze_trend(output_180d)
+
         if not args.no_save:
             os.makedirs(RESEARCH_DIR, exist_ok=True)
             filename = f"{today}-{kw_filename}.md"
             filepath = os.path.join(RESEARCH_DIR, filename)
-            # md_1d 和 md_7d 的最后一段是"分析与建议"（watchlist 操作提示），存档时去掉
             def strip_suggestions(sections: list[str]) -> list[str]:
                 for i, s in enumerate(sections):
                     if s.startswith("## 分析与建议"):
@@ -443,13 +530,16 @@ def main():
                 return sections
             with open(filepath, "w") as f:
                 f.write(f"# {kw_display} — {today}\n\n")
-                f.write("> 选题研究模式：1天 + 7天联查\n\n")
+                f.write("> 选题研究模式：1天 + 7天联查 + 趋势分析\n\n")
                 f.write("## 1天 Top 10\n\n")
                 f.write("\n".join(strip_suggestions(md_1d)))
                 f.write(f"\n\n## 7天 Top 20\n\n")
                 f.write("\n".join(strip_suggestions(md_7d)))
                 f.write("\n\n")
                 f.write(compare_md)
+                if trend_md:
+                    f.write("\n\n")
+                    f.write(trend_md)
             print(f"\n已保存：{filepath}")
         return
 
