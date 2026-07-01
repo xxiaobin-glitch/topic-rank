@@ -76,3 +76,18 @@ python3 scripts/watchlist.py --name 编导李让
 ## 飞书通知
 
 待日后实现。计划：运行后自动推送摘要到飞书群。
+
+## 抖音抓取环境依赖（MediaCrawler）
+
+抖音关键词排行走 MediaCrawler，浏览器启动分两级：
+
+1. **CDP 模式**（优先）：用系统 Chrome 启动带调试端口的独立实例（profile: `browser_data/cdp_dy_user_data_dir`）
+2. **标准 Playwright 模式**（CDP 失败时的 fallback）：用 Playwright 自带 Chromium（profile: `browser_data/dy_user_data_dir`）
+
+**已知坑：**
+
+- **Chrome 自动更新可能让 CDP 模式失效**（新版本收紧自动化启动限制），报错 `Server disconnected without sending a response`。fallback 到标准模式时如果没装过 Playwright 浏览器会接着报 `Executable doesn't exist`。
+  → 解决：`cd ~/Projects/MediaCrawler && source .venv/bin/activate && playwright install chromium`（约 250MB，独立于系统 Chrome，装一次长期有效，直到 Playwright 版本升级）
+- **profile 目录锁残留**：如果上次运行的浏览器进程被异常杀掉（比如后台任务被强制终止），`browser_data/*/SingletonLock` 不会被清理，下次运行会报 `Failed to create SingletonLock: File exists`。
+  → `douyin-rank-custom.py` 的 `clear_stale_browser_locks()` 会在每次运行前自动检测并清理僵尸锁（只在确认没有进程占用该 profile 时才清），一般不需要手动处理。手动清理：`pkill -f dy_user_data_dir`
+- **MediaCrawler 子进程输出必须被捕获**：`run_mediacrawler()` 用 `capture_output=True` 运行 MediaCrawler，不能让它的日志直接继承 stdout——否则 `rank.py` 会把这些日志原样存进最终的 Markdown 存档。这是历史踩过的坑，改动这块代码时要注意别退回去。

@@ -63,6 +63,31 @@ VALID_TIME_FILTERS = {0, 1, 7, 180}  # MediaCrawler PUBLISH_TIME_TYPE 支持的�
 
 BASE_CONFIG_PATH = os.path.join(MEDIACRAWLER_DIR, "config", "base_config.py")
 
+BROWSER_DATA_DIR = os.path.join(MEDIACRAWLER_DIR, "browser_data")
+
+
+def clear_stale_browser_locks() -> None:
+    """清理浏览器 profile 目录里的僵尸 SingletonLock。
+
+    上次运行的浏览器进程被异常终止（如后台任务被杀）时会残留锁文件，
+    导致新进程无法启动同一 profile 而直接报错退出。只在确认没有进程
+    仍在用该 profile 时才清理，避免误杀正在运行的爬取。
+    """
+    for name in ("dy_user_data_dir", "cdp_dy_user_data_dir"):
+        profile_dir = os.path.join(BROWSER_DATA_DIR, name)
+        check = subprocess.run(
+            ["pgrep", "-f", profile_dir], capture_output=True, text=True
+        )
+        if check.returncode == 0:
+            continue  # 有进程仍在用这个 profile，别动
+        for lock_name in ("SingletonLock", "SingletonSocket", "SingletonCookie"):
+            lock_path = os.path.join(profile_dir, lock_name)
+            if os.path.islink(lock_path) or os.path.exists(lock_path):
+                try:
+                    os.remove(lock_path)
+                except OSError:
+                    pass
+
 
 def patch_configs(publish_time_type: int, max_notes: int) -> tuple[str, str]:
     """临时改写两个 config 文件，返回原始内容用于恢复。"""
@@ -107,6 +132,7 @@ TIME_FILTER_SECONDS = {1: 86400, 7: 7 * 86400, 180: 180 * 86400}
 
 def run_mediacrawler(keyword: str, publish_time_type: int, time_filter_active: bool) -> bool:
     """运行 MediaCrawler 单关键词搜索，返回是否成功。"""
+    clear_stale_browser_locks()
     max_notes = 45 if time_filter_active else 15
     dy_orig, base_orig = patch_configs(publish_time_type, max_notes)
     try:
@@ -119,9 +145,14 @@ def run_mediacrawler(keyword: str, publish_time_type: int, time_filter_active: b
             "--type", "search",
             "--keywords", keyword,
         ]
-        result = subprocess.run(cmd, cwd=MEDIACRAWLER_DIR, timeout=600)
+        result = subprocess.run(
+            cmd, cwd=MEDIACRAWLER_DIR, timeout=600,
+            capture_output=True, text=True,
+        )
         if result.returncode != 0:
             print("[错误] MediaCrawler 运行失败", file=sys.stderr)
+            print(result.stdout[-3000:], file=sys.stderr)
+            print(result.stderr[-3000:], file=sys.stderr)
             return False
         return True
     finally:
