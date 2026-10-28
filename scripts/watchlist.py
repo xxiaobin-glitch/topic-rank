@@ -12,7 +12,8 @@ watchlist.py
   python3 watchlist.py --list-categories        # 列出所有分类
 
   添加创作者：
-  python3 watchlist.py --add --name "齐马蓝" --sec-uid <sec_uid> --category "爽文·反道德绑架" [--note "备注"]
+  python3 watchlist.py --add --name "齐马蓝" --sec-uid <sec_uid> [--category "分类"] [--note "备注"]
+  python3 watchlist.py --remove --name "齐马蓝"
 
 注意：抖音 user-videos 只返回点赞数，无收藏/分享/评论。
       视频按发布时间倒序（index=1 为最新），--limit 控制拉多少条。
@@ -80,13 +81,25 @@ def cmd_add(args):
         "platform": "douyin",
         "sec_uid": args.sec_uid,
         "user_id": "",
-        "category": args.category,
         "added": date.today().isoformat(),
         "note": args.note or "",
     }
+    # 分类可选（2026-10-27 起清空了旧分类，等真用起来再按需建）
+    if args.category:
+        new_creator["category"] = args.category
     creators.append(new_creator)
     save_watchlist(creators)
-    print(f"已添加：{args.name}（{args.category}）")
+    print(f"已添加：{args.name}" + (f"（{args.category}）" if args.category else ""))
+
+
+def cmd_remove(args):
+    creators = load_watchlist()
+    kept = [c for c in creators if c["name"] != args.name]
+    if len(kept) == len(creators):
+        print(f"[错误] watchlist 里没有「{args.name}」（要完整名字）")
+        sys.exit(1)
+    save_watchlist(kept)
+    print(f"已移除：{args.name}")
 
 
 def cmd_watch(args, creators: list[dict]):
@@ -108,9 +121,9 @@ def cmd_watch(args, creators: list[dict]):
         sys.exit(1)
 
     for creator in douyin_creators:
-        cat = creator.get("category", "未分类")
+        cat = f"  [{creator['category']}]" if creator.get("category") else ""
         print(f"\n{'='*62}")
-        print(f"  {creator['name']}  [{cat}]  |  最近 {args.limit} 条 → Top {args.top} 按点赞")
+        print(f"  {creator['name']}{cat}  |  最近 {args.limit} 条 → Top {args.top} 按点赞")
         if creator.get("note"):
             print(f"  {creator['note']}")
         print(f"{'='*62}\n")
@@ -148,6 +161,7 @@ def main():
     parser.add_argument("--add", action="store_true", help="添加新创作者")
     parser.add_argument("--sec-uid", type=str, default=None, dest="sec_uid", help="添加时的 sec_uid")
     parser.add_argument("--note", type=str, default=None, help="添加时的备注")
+    parser.add_argument("--remove", action="store_true", help="移除创作者（配合 --name 完整名字）")
     args = parser.parse_args()
 
     if args.list_categories:
@@ -155,10 +169,17 @@ def main():
         return
 
     if args.add:
-        if not args.name or not args.sec_uid or not args.category:
-            print("[错误] --add 需要同时提供 --name <名字> <sec_uid> --category <分类>")
+        if not args.name or not args.sec_uid:
+            print("[错误] --add 需要同时提供 --name <名字> --sec-uid <sec_uid>（--category 可选）")
             sys.exit(1)
         cmd_add(args)
+        return
+
+    if args.remove:
+        if not args.name:
+            print("[错误] --remove 需要 --name <完整名字>")
+            sys.exit(1)
+        cmd_remove(args)
         return
 
     cmd_watch(args, load_watchlist())

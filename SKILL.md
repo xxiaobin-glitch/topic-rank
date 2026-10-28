@@ -1,6 +1,6 @@
 ---
 name: topic-rank
-description: 查询某个话题/关键词在抖音、B站、小红书的内容排行表现。当用户说「查B站 X」「搜小红书 X」「三平台排行 X」「抖音热门 X」「X 在各平台表现怎么样」「帮我查查 X 相关内容」「X 哪些视频最火」时，务必触发此 skill，即使用户没有说"排行"这个词。当用户说「查 watchlist」「看一下我关注的人」「监控的创作者」「watchlist 更新了吗」时，路由到 watchlist 命令。
+description: 查询某个话题/关键词在抖音、B站、小红书的内容排行表现。当用户说「查B站 X」「搜小红书 X」「三平台排行 X」「抖音热门 X」「X 在各平台表现怎么样」「帮我查查 X 相关内容」「X 哪些视频最火」时，务必触发此 skill，即使用户没有说"排行"这个词。当用户说「查 watchlist」「看一下我关注的人」「监控的创作者」「watchlist 更新了吗」时，路由到 watchlist 命令。当用户说「抓AI剧情榜」「抓一下AI剧情榜」时，跑 dy-batch.py --preset ai剧情（见「预设榜单」节）。
 ---
 
 # topic-rank
@@ -9,20 +9,47 @@ description: 查询某个话题/关键词在抖音、B站、小红书的内容�
 
 ## 脚本位置
 
+脚本在**本 SKILL.md 同级的 `scripts/` 目录**下。不要写死任何平台专属路径——本 skill 可能被安装在 `~/.claude/skills/`、`~/.agents/skills/` 或其他位置，路径以实际所在目录为准。
+
+下文示例中的 `$TR` 代表 `<本 skill 目录>/scripts`。执行前先解析成实际路径，例如：
+
 ```
-~/.claude/skills/topic-rank/scripts/
+TR="$(dirname "$(readlink -f 本SKILL.md所在目录)")/scripts"
 ```
+
+或直接用本 skill 所在目录拼接。存档目录也不写死：优先读环境变量 `TOPIC_RANK_RESEARCH_DIR`，未设置时落到 `~/topic-rank-research/`。
+
+## 运行环境与平台可用性
+
+Python 3.9+（脚本已加 `from __future__ import annotations`，兼容 3.9–3.14；`rank.py` 用 `sys.executable` 调子脚本，保证子进程同解释器）。
+
+各平台的依赖不同，**在沙箱环境里可用性也不同**：
+
+| 平台 | 依赖 | 沙箱环境（如 Codex） |
+|---|---|---|
+| B站 `bili` | 纯 HTTP，无浏览器 | ✅ 可用（2026-08-01 实测 16.4 秒、退出码 0） |
+| 小红书 `xhs` | 纯 HTTP，无浏览器 | 预期可用，未实测 |
+| YouTube `yt` | `yt-dlp`，无需 API key、不读 cookie | ✅ 可用（2026-09-22 实测，40 秒含 B站联查）|
+| 抖音 `dy` | MediaCrawler，**必须启动 Chromium** | ⚠️ **常规沙箱不可用**（Chromium 启动 Permission denied）；**单次提升权限后可用**——2026-08-01 实测 17.17 秒、退出码 0、结果正常。权限不能永久放开，每次跑抖音都需单次提权。 |
+
+**退出码**：所有平台均未取得有效结果时返回 **1** 并且不写报告文件；有任一平台成功返回 **0**。调用方据此判断成败，不要只看有没有输出。
+（源：2026-08-01 Codex 验收——沙箱内抓取全失败，进程却返回 0，且输出"Top 3 作者均已在 watchlist 中"，两处均已修。）
 
 ## 执行命令
 
 **话题排行（三平台）：**
 ```
-python3 ~/.claude/skills/topic-rank/scripts/rank.py <keyword> [参数]
+python3 $TR/rank.py <keyword> [参数]
+```
+
+**单条视频评论拆解（抖音，仅在用户明确要求时才跑）：**
+```
+python3 $TR/comments.py <视频链接或ID> [--count N] [--top N] [--sub] [--no-save]
 ```
 
 **创作者 watchlist：**
 ```
-python3 ~/.claude/skills/topic-rank/scripts/watchlist.py [参数]
+python3 $TR/watchlist.py [参数]
 ```
 
 ## 参数映射 — 话题排行
@@ -34,8 +61,15 @@ python3 ~/.claude/skills/topic-rank/scripts/watchlist.py [参数]
 | 抖音 / dy | `--platforms dy` |
 | B站 / bilibili | `--platforms bili` |
 | 小红书 / xhs | `--platforms xhs` |
-| 没提平台 | 不加此参数（三个全查） |
+| YouTube / 油管 | `--platforms yt` |
+| 没提平台 | 不加此参数（抖音/B站/小红书三个全查，**不含 YouTube**） |
 | 两个平台 | 如 `--platforms dy xhs` |
+
+> **YouTube 为什么不在默认列表**（2026-09-22 加）：多数选题是中文短视频赛道，YouTube 命中率低，而它每次要多花约 30 秒补详情。用户明确说「查 YouTube」「油管」「四平台」时才带上 `yt`。
+>
+> **YouTube 的评分维度与其他平台不同**：只有 播放/点赞/评论，没有收藏、分享、投币，权重按剩余维度重新分配（`virality` = 点赞×0.6 + 评论×0.4；`value` = 点赞×0.7 + 评论×0.3）。**不要跨平台比分数**——其实现有三平台之间本来也不可比（B站有投币、抖音有收藏分享），报告是分平台排序的。
+>
+> **抓取分两阶段**：先 `--flat-playlist` 粗搜 60 条（约 3 秒，只有播放量），再按播放量取前 25 条并发补点赞/评论/发布日期（约 25 秒）。直接全量抓详情是 4.5 秒/条，50 条近 4 分钟，不可接受。要调条数用 `--detail N`（仅直接调用子脚本时有效）。
 
 **评分模式**（`--score`，默认 `value`）：
 
@@ -70,6 +104,23 @@ python3 ~/.claude/skills/topic-rank/scripts/watchlist.py [参数]
 
 存档默认存到 `~/topic-rank-research/`。若想改存档目录，设置环境变量 `TOPIC_RANK_RESEARCH_DIR`。
 
+## 预设榜单（dy-batch.py --preset）
+
+标签、过滤词、窗口存在 `data/dy-presets.json`，加减标签只改那个文件。**必须用 run-task 启动**（菜单栏看进度），抓 12 个标签约 35 分钟，后台跑：
+
+| 用户说的 | 命令 |
+|---------|------|
+| 抓AI剧情榜 | `~/Projects/tools/progress/run-task "抖音AI剧情榜" -- python3 $TR/dy-batch.py --preset ai剧情` |
+| 抓AI剧情榜，加 7 天 | 末尾加 `--windows 1 3 7`（7 天和 3 天同用 7 天抓取档，不多抓） |
+| 只重出榜、不抓 | 末尾加 `--no-crawl` |
+
+| 把某作者加进排除名单 | `python3 $TR/dy-preset.py add --name "完整昵称" --reason "原因"`（按昵称在近 7 天抓取数据里找 sec_uid；找不到或同名多人时让用户给主页链接，用 `--sec-uid`）|
+| 移出排除名单 / 看排除名单 | `dy-preset.py remove --name "昵称"` / `dy-preset.py list` |
+
+排除名单＝暂时学不了、榜里不看的作者。只作用于该预设的榜（换话题查时不排除），watchlist 照常拉他们，两边互不影响。排除在 LLM 过滤和排名之前做，名额由后面的视频补满，榜末写「已按排除名单剔除：…」。
+
+跑完把三份产物路径告诉用户；对照表读法：名次看「火得久／能不能打过老视频」，趋势看「加速比」（见硬规则 9）。
+
 ## 参数映射 — watchlist
 
 | 用户说的 | 参数 |
@@ -78,9 +129,24 @@ python3 ~/.claude/skills/topic-rank/scripts/watchlist.py [参数]
 | 拉多一点 / 最近 30 条 | `--limit 30` |
 | 看 Top 10 | `--top 10` |
 | 只看某人，如「只查李让」 | `--name 编导李让` |
-| 只看某个赛道，如「只看爽文类」 | `--category "爽文·反道德绑架"` |
+| 只看某个分类 | `--category "分类名"`（2026-10-27 旧分类已清空，当前全部未分类）|
 | 有哪些分类 / 分了几个类 | `--list-categories` |
-| 把某人加进 watchlist | `--add --name "名字" --sec-uid <uid> --category "分类名" [--note "备注"]` |
+| 把某人加进 watchlist | `--add --name "名字" --sec-uid <uid> [--category "分类名"] [--note "备注"]`。sec_uid 从榜单链接 `user/<sec_uid>?modal_id=` 里取；榜外作者让用户给主页链接 |
+| 把某人移出 watchlist | `--remove --name "完整名字"` |
+
+## 参数映射 — 评论拆解（comments.py）
+
+**只在用户明确指向某一条视频时才跑**：「这条评论看看」「拆解一下这条的评论区」「看看观众怎么说」。
+排行流程**永远不抓评论**——排序只用赞/藏/评/享四个数字，评论正文不进任何计算。
+
+| 用户说的 | 参数 |
+|---------|------|
+| 没提特别要求 | 直接运行（抓 50 条，显示 Top 30，存档） |
+| 多看点 / 抓 100 条 | `--count 100` |
+| 看回复区 / 二级评论 | `--sub` ⚠️ 见下方警告 |
+| 只看看不存 | `--no-save` |
+
+⚠️ **`--sub` 默认不要加。** 爆款视频的热评常有几千条回复（2026-08-15 实测：一条 22 万赞的评论下有 4524 条回复，600 秒抓不完），只有用户明确说要看回复区才开。
 
 ## 执行步骤
 
@@ -91,57 +157,85 @@ python3 ~/.claude/skills/topic-rank/scripts/watchlist.py [参数]
 
 遇到模糊的情况，先按最合理的参数跑，跑完再问要不要调整，不要跑之前反复确认。
 
+## 硬规则（2026-08-15 加，均由实际事故催生）
+
+1. **默认全存，不要自作主张加 `--no-save`。** 只有用户说「别存」「只看看」才加。当天多轮查询就存多份，不要替用户判断哪份"不值得存"。
+2. **多轮查询分别存档，不要合并成一份对比报告**，除非用户明确要对比。
+3. **不要绕开脚本自己写代码整理输出。** 脚本里沉淀了踩过的坑（如视频链接必须是 `https://www.douyin.com/user/<sec_uid>?modal_id=<aweme_id>`，写成 `/video/<id>` 打不开），自己重写等于把这些修复全丢掉。
+4. **查 A×B 窄交叉（如「防骗」×「AI制作」）时，第一轮不要同时上 `--require` 和 `--llm-filter`。** 先看基本盘有多少，再决定收紧程度。
+6. **抖音报 `chromium_headless_shell` 不存在时，先查 `NO_PROXY`，不要急着 `playwright install`。**（2026-08-30）
+   CDP 模式下 MediaCrawler 用 httpx 访问 `127.0.0.1:9222` 取 WebSocket 地址。shell 里设了
+   `HTTP_PROXY`/`HTTPS_PROXY` 而没有 `NO_PROXY` 时，httpx 会把本地回环也走代理 → `ReadTimeout`
+   → CDP 启动失败 → 静默回退标准模式 → 报 headless shell 缺失。**真实报错被 `logger.error` 吞掉了，
+   栈顶显示的是回退之后的错误，会把人带偏。** `douyin-rank-custom.py` 已在子进程 env 里强制放行
+   回环地址，此坑不应再现。
+
+7. **`--score engagement` 曾经是坏的，已修（2026-09-22）。** `rank.py` 对外叫 `engagement`，子脚本内部叫 `engagement_rate`，中间没有映射，导致每个子脚本都 argparse 报错退出——而本文档一直写着这条可用。现已在 `run_platform` 里加了映射。**以后给子脚本加参数，记得检查 rank.py 那层传过去的名字是否一致。**
+
+5. **抖音搜索抓取随机性极大**：同关键词、同参数、间隔十几分钟重跑，两次结果重叠可能不到一半（2026-08-15 实测 60 条 vs 79 条，重叠 33 条）。**不要用「这次比上次少」推断参数或代码出了问题**——先重跑一次看波动。
+
+8. **抖音多关键词：逐个核对每个词有没有抓到。**（2026-10-21）一次传 3–4 个词时，常常只有一两个真有数据，其余 0 条且不报错；连搜几次后整次返回「未从 JSONL 中找到匹配记录」，像被限流——隔一阵、一次一个词再查。冷门词（如「强基计划」）结果不够时抖音会补无关热门（航母新闻），要加 `--llm-filter`。同日重查数字不更新的 bug 已修（`read_today_jsonl` 改为保留最新一条）。
+
+9. **抖音多标签一律用 `dy-batch.py`，不要一次把多个词塞给 rank.py。**（2026-10-27）5 个词连着搜只有第 1 个有数据；每次搜索间隔 90 秒后 12 个词全部正常。`dy-batch.py` 做的事：逐个词、按需要的抓取档（近 1 天→1 天档，近 3 天→7 天档）各抓一次，间隔 `--gap` 秒；某个词各档都 0 条就停止抓取（疑似限流）；然后用 `douyin-rank-custom.py --no-crawl` 合并出每个窗口的榜，再出对照表。**必须用 run-task 启动**，菜单栏才有进度：
+   ```bash
+   ~/Projects/tools/progress/run-task "抖音AI剧情榜" -- python3 $TR/dy-batch.py <词1> <词2> … --windows 1 3 --top 30 --llm-filter "主题"
+   ```
+   只重出榜不抓：加 `--no-crawl`。产物：`<前两个词>-抖音-1天内-日期.md`、`…-近3天-日期.md`、`…-近1天vs近3天对照-日期.md`。
+   - **对照表名次和趋势分开读**：名次看火得久——发布超过 1 天还能挤进 3 天/7 天榜的、几个窗口都靠前的，是持续火（木杉提的用法）。名次不能看上升：今天发的视频在各窗口分数相同，在长窗口名次只会持平或下降，那只是老爆款进来抢位置。趋势看「加速比」= 两次抓取之间的每小时涨赞 ÷ 发布以来平均每小时涨赞。点赞多集中在刚发出那段，「放缓」是常态，只有「加速」值得看。快照读近 3 天的 JSONL，**同一晚几轮抓取间隔太短，几乎全是「数据不足」——要看趋势就隔几个小时再跑一轮（今晚一轮、明早一轮）**。
+   - 「有效视频 N 条」是按子串匹配 source_keyword 统计的（搜「AI创作浪潮」会把「ai创作浪潮计划」的数据也算进去），核对某个词抓到多少要按 source_keyword 精确计数（dy-batch 已这么做）。
+   - 同日修的：抖音近 N 天原来按 7 天档抓且不裁剪，现加 `--within N` 精确裁剪（rank.py 已透传）；`--llm-filter` 送审条数改为 `max(40, top×3)`；存档文件名带时间窗口，同日查 1 天和 3 天不再互相覆盖；直接 `douyin-rank-custom.py --save` 的存档原来漏了发布时间，现写「发布:10-27 02:10（21小时前）」。
+
 ## 示例
 
 **查单平台：**
 用户：「查B站 seedance」
 ```bash
-python3 ~/.claude/skills/topic-rank/scripts/rank.py "seedance" --platforms bili
+python3 $TR/rank.py "seedance" --platforms bili
 ```
 
 **查三平台：**
 用户：「三平台看看 AI视频 最近表现」
 ```bash
-python3 ~/.claude/skills/topic-rank/scripts/rank.py "AI视频"
+python3 $TR/rank.py "AI视频"
 ```
 
 **近期时间窗口：**
 用户：「查一下近 10 天 AI视频 的热榜」
 ```bash
-python3 ~/.claude/skills/topic-rank/scripts/rank.py "AI视频" --within 10
+python3 $TR/rank.py "AI视频" --within 10
 ```
 
 **指定模式：**
 用户：「小红书手机摄影历史最火的，看传播力」
 ```bash
-python3 ~/.claude/skills/topic-rank/scripts/rank.py "手机摄影" --platforms xhs --no-time-weight --score virality
+python3 $TR/rank.py "手机摄影" --platforms xhs --no-time-weight --score virality
 ```
 
 **多关键词合并（覆盖不挂标签的创作者）：**
 用户：「查抖音 AI短片 和 ai创作浪潮计划 近7天」
 ```bash
-python3 ~/.claude/skills/topic-rank/scripts/rank.py "AI短片" "ai创作浪潮计划" --platforms dy --within 7
+python3 $TR/rank.py "AI短片" "ai创作浪潮计划" --platforms dy --within 7
 ```
 
 **选题决策联查：**
 用户：「拒绝道德绑架相关，看看还知不知道接着做」
 ```bash
-python3 ~/.claude/skills/topic-rank/scripts/rank.py "拒绝道德绑架" "末世先杀圣母" --platforms dy --compare
+python3 $TR/rank.py "拒绝道德绑架" "末世先杀圣母" --platforms dy --compare
 ```
 
 **LLM 精筛（减少混入）：**
 用户：「查抖音 高考 AI短片，过滤精准一点」
 ```bash
-python3 ~/.claude/skills/topic-rank/scripts/rank.py "高考" "ai短片" --platforms dy --require ai --llm-filter "高考相关的AI制作视频"
+python3 $TR/rank.py "高考" "ai短片" --platforms dy --require ai --llm-filter "高考相关的AI制作视频"
 ```
 
 **watchlist：**
 用户：「查一下 watchlist」
 ```bash
-python3 ~/.claude/skills/topic-rank/scripts/watchlist.py
+python3 $TR/watchlist.py
 ```
 
 用户：「只看李让，多拉一点」
 ```bash
-python3 ~/.claude/skills/topic-rank/scripts/watchlist.py --name 编导李让 --limit 30
+python3 $TR/watchlist.py --name 编导李让 --limit 30
 ```

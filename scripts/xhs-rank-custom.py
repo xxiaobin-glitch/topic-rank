@@ -23,6 +23,9 @@ xhs-rank-custom.py
   加 --no-time-weight 关闭，适合查历史最高。
 """
 
+# 兼容 Python 3.9：见 rank.py 顶部说明（PEP 604 标注在 3.10 以下会崩）
+from __future__ import annotations
+
 import argparse
 import json
 import os

@@ -21,6 +21,9 @@ bili-rank-custom.py
   --hot 模式已是时间窗口榜单，不再额外加权。
 """
 
+# 兼容 Python 3.9：见 rank.py 顶部说明（PEP 604 标注在 3.10 以下会崩）
+from __future__ import annotations
+
 import argparse
 import json
 import sys

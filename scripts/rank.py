@@ -12,6 +12,11 @@ rank.py
   python3 rank.py "seedance" --no-save          # 只打印，不存文件
 """
 
+# 兼容 Python 3.9：本文件用了 PEP 604 的 `X | None` 标注，3.10 以下会在定义函数时就报
+# TypeError: unsupported operand type(s) for |。加上这行让标注惰性求值。
+# 源：2026-08-01 Codex 在它的环境（/usr/bin/python3 3.9.6）跑验收时崩溃暴露。
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -22,6 +27,8 @@ from datetime import date
 
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 WATCHLIST_FILE = os.path.join(TOOLS_DIR, "..", "data", "watchlist.json")
+# 提示用户执行的 watchlist 命令，路径按本脚本实际位置推导，不写死任何平台专属目录
+WATCHLIST_SCRIPT = os.path.join(TOOLS_DIR, "watchlist.py")
 # 存档目录：优先读环境变量 TOPIC_RANK_RESEARCH_DIR，否则存到 ~/topic-rank-research/
 RESEARCH_DIR = os.path.expanduser(
     os.environ.get("TOPIC_RANK_RESEARCH_DIR", "~/topic-rank-research")
@@ -31,7 +38,12 @@ PLATFORM_SCRIPTS = {
     "dy":  ("抖音",  "douyin-rank-custom.py"),
     "bili": ("B站",  "bili-rank-custom.py"),
     "xhs": ("小红书", "xhs-rank-custom.py"),
+    # YouTube 不进默认平台列表：多数选题是中文短视频赛道，YouTube 命中率低，
+    # 而它每次要多花约 30 秒补详情。要查就显式 --platforms yt。
+    "yt":  ("YouTube", "youtube-rank-custom.py"),
 }
+
+DEFAULT_PLATFORMS = ["dy", "bili", "xhs"]
 
 
 def within_to_time_filter(within: int) -> int:
@@ -49,13 +61,21 @@ def run_platform(platform: str, script: str, keyword: list[str], score: str, top
                  no_time_weight: bool, within: int | None, require: list[str] | None = None,
                  llm_filter: str | None = None) -> tuple[str, bool]:
     """Run a platform script and return (stdout, success)."""
-    cmd = ["python3", os.path.join(TOOLS_DIR, script)] + keyword + \
-          ["--score", score, "--top", str(top)]
+    # 用 sys.executable 而不是 "python3"：保证子脚本与本进程同一个解释器，
+    # 否则 PATH 里的 python3 可能是另一个版本（源：2026-08-01 Codex 3.9 环境验收）
+    # rank.py 对外叫 engagement，子脚本内部叫 engagement_rate。不映射的话
+    # --score engagement 会让每个子脚本都 argparse 报错退出（2026-09-22 发现，
+    # 此前这条路一直是坏的，SKILL.md 里却写着可用）。
+    script_score = "engagement_rate" if score == "engagement" else score
+    cmd = [sys.executable, os.path.join(TOOLS_DIR, script)] + keyword + \
+          ["--score", script_score, "--top", str(top)]
     if no_time_weight:
         cmd.append("--no-time-weight")
     if within:
         if platform == "dy":
             cmd.extend(["--time-filter", str(within_to_time_filter(within))])
+            # 抓取档是粗粒度的（如近 3 天落到 7 天档），再按精确天数裁一次
+            cmd.extend(["--within", str(within)])
         else:
             cmd.extend(["--within", str(within)])
     if require:
@@ -133,9 +153,9 @@ def parse_top_creators(output: str, platform_key: str) -> list[dict]:
             url = ""
             for j in range(i + 1, min(i + 10, len(lines))):
                 candidate = lines[j].strip()
-                if re.match(r"(作者:|UP:)", candidate):
+                if re.match(r"(作者:|UP:|频道:)", candidate):
                     author = re.sub(r"→.*", "", candidate)
-                    author = re.sub(r"作者:|UP:", "", author).strip()
+                    author = re.sub(r"作者:|UP:|频道:", "", author).strip()
                     url_match = re.search(r"https?://\S+", candidate)
                     url = url_match.group(0) if url_match else ""
                     break
@@ -157,7 +177,7 @@ def parse_top_creators(output: str, platform_key: str) -> list[dict]:
 def print_suggestions(platform_results: list[tuple[str, str, str, bool]], keyword: str) -> str:
     """打印分析与建议块，返回 Markdown 文本。"""
     watchlist = load_watchlist_names()
-    platform_labels = {"dy": "抖音", "bili": "B站", "xhs": "小红书"}
+    platform_labels = {"dy": "抖音", "bili": "B站", "xhs": "小红书", "yt": "YouTube"}
 
     lines = ["\n" + "─" * 55, "  分析与建议", "─" * 55]
     md_lines = ["## 分析与建议", ""]
@@ -215,14 +235,23 @@ def print_suggestions(platform_results: list[tuple[str, str, str, bool]], keywor
             line = f"  [{plat} #{c['rank']}] {c['author']}  {c['score_str']}  {c['url']}"
             lines.append(line)
             md_lines.append(line)
-        lines += ["", "→ 存入 watchlist（替换分类名后执行）："]
-        for c in unique_suggestions:
-            if c.get("sec_uid"):
-                cmd = f"  python3 ~/.claude/skills/topic-rank/scripts/watchlist.py --add --name \"{c['author']}\" --sec-uid {c['sec_uid']} --category \"分类名\""
-                lines.append(cmd)
+        # watchlist 目前只认抖音 sec_uid。YouTube/B站等没有 sec_uid 的平台
+        # 生成不了添加命令，这时不要留一个下面空无一物的标题。
+        cmds = [
+            f"  python3 {WATCHLIST_SCRIPT} --add --name \"{c['author']}\" --sec-uid {c['sec_uid']}"
+            for c in unique_suggestions if c.get("sec_uid")
+        ]
+        if cmds:
+            lines += ["", "→ 存入 watchlist（要分类就末尾加 --category \"分类名\"）："] + cmds
     else:
-        lines.append("\n本次 Top 3 作者均已在 watchlist 中。")
-        md_lines.append("\n本次 Top 3 作者均已在 watchlist 中。")
+        # 区分"有结果但都已追踪"和"根本没拿到结果"——后者说成前者是误导。
+        # 源：2026-08-01 Codex 沙箱内 Chromium 起不来、抓取全失败，输出却是"均已在 watchlist 中"。
+        if not all_creators:
+            msg = "\n本次未取得任何结果，无法给出 watchlist 建议——请检查上面各平台的抓取是否失败。"
+        else:
+            msg = "\n本次 Top 3 作者均已在 watchlist 中。"
+        lines.append(msg)
+        md_lines.append(msg)
 
     lines.append("─" * 55)
     print("\n".join(lines))
@@ -455,9 +484,9 @@ def generate_compare_analysis(results_1d: list, results_7d: list) -> str:
             suggestions.append(c)
 
     if suggestions:
-        lines += ["", "→ 存入 watchlist（替换分类名后执行）："]
+        lines += ["", "→ 存入 watchlist（要分类就末尾加 --category \"分类名\"）："]
         for c in suggestions:
-            lines.append(f"  python3 ~/.claude/skills/topic-rank/scripts/watchlist.py --add --name \"{c['author']}\" --sec-uid {c['sec_uid']} --category \"分类名\"")
+            lines.append(f"  python3 {WATCHLIST_SCRIPT} --add --name \"{c['author']}\" --sec-uid {c['sec_uid']}")
 
     lines.append("─" * 55)
     print("\n".join(lines))
@@ -468,9 +497,10 @@ def main():
     parser = argparse.ArgumentParser(description="三平台话题排行，合并存档")
     parser.add_argument("keyword", nargs="+", help="搜索关键词，支持多个（结果合并去重）")
     parser.add_argument(
-        "--platforms", nargs="+", choices=["dy", "bili", "xhs"],
-        default=["dy", "bili", "xhs"],
-        help="指定平台（默认全部）：dy=抖音 bili=B站 xhs=小红书",
+        "--platforms", nargs="+", choices=["dy", "bili", "xhs", "yt"],
+        default=DEFAULT_PLATFORMS,
+        help="指定平台（默认 dy/bili/xhs）：dy=抖音 bili=B站 xhs=小红书 yt=YouTube"
+             "（yt 不在默认列表，要查须显式指定）",
     )
     parser.add_argument(
         "--score", choices=["value", "virality", "engagement"],
@@ -519,6 +549,11 @@ def main():
             if success_180d:
                 trend_md = analyze_trend(output_180d)
 
+        # 同上：1天和7天都颗粒无收时，按失败退出，不写空报告。
+        if not (any(s for _, _, _, s in results_1d) or any(s for _, _, _, s in results_7d)):
+            print("\n[失败] 1天与7天查询均未取得有效结果，本次不写入报告文件。", file=sys.stderr)
+            return 1
+
         if not args.no_save:
             os.makedirs(RESEARCH_DIR, exist_ok=True)
             filename = f"{today}-{kw_filename}.md"
@@ -541,7 +576,7 @@ def main():
                     f.write("\n\n")
                     f.write(trend_md)
             print(f"\n已保存：{filepath}")
-        return
+        return 0
 
     # 普通单次查询
     if args.within and args.no_time_weight:
@@ -577,8 +612,15 @@ def main():
     suggest_md = print_suggestions(platform_results, args.keyword)
     md_sections.append(suggest_md)
 
+    # 所有平台都失败时以非零退出码结束，并且不写入空报告。
+    # 源：2026-08-01 Codex 沙箱内 Chromium 起不来、抓取全失败，进程仍返回 0，
+    # 自动化和调用方无法判断成败。
+    if not any(success for _, _, _, success in platform_results):
+        print("\n[失败] 所有平台均未取得有效结果，本次不写入报告文件。", file=sys.stderr)
+        return 1
+
     if args.no_save:
-        return
+        return 0
 
     os.makedirs(RESEARCH_DIR, exist_ok=True)
     filename = f"{today}-{kw_filename}.md"
@@ -587,7 +629,8 @@ def main():
         f.write("\n".join(md_sections))
 
     print(f"\n已保存：{filepath}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

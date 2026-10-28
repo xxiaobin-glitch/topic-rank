@@ -5,6 +5,8 @@
 ## 功能
 
 - `rank.py`：输入关键词，拉三平台排行，按综合价值 / 传播力 / 互动率评分，输出 Markdown 存档
+- `dy-batch.py`：抖音多标签批量抓取（逐个抓防限流）→ 出多个时间窗口的榜 + 趋势对照表，用 `tools/progress/run-task` 启动可在菜单栏看进度
+- `dy-preset.py`：管理预设榜单（`data/dy-presets.json`）的排除名单
 - `watchlist.py`：监控 `data/watchlist.json` 里的创作者，拉抖音最新视频，按点赞排名
 
 ## 依赖
@@ -26,7 +28,12 @@ pip install pyyaml
 
 ## 安装
 
-将整个目录放到 `~/.claude/skills/topic-rank/`，Claude Code 会自动识别 `SKILL.md`。
+把整个目录放到任一 skill 目录即可，脚本内部不依赖安装位置（路径按自身实际位置推导）：
+
+- **Claude Code**：`~/.claude/skills/topic-rank/`，会自动识别 `SKILL.md` 并按 description 触发。
+- **跨平台共享**：`~/.agents/skills/topic-rank/`，Claude Code 侧建一个软链指过去即可；Codex 按路径读 `SKILL.md` + 直接跑脚本。
+
+两处**只保留一份实体**，另一处用软链，避免两份分叉（2026-08-01 就分叉过一次，见 `notes/NEXT.md`）。
 
 ## 配置
 

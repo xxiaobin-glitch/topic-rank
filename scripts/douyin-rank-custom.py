@@ -144,10 +144,25 @@ def run_mediacrawler(keyword: str, publish_time_type: int, time_filter_active: b
             "--lt", "cookie",
             "--type", "search",
             "--keywords", keyword,
+            # 2026-08-15 对照实验：B 组（新方法，带提速参数）
+            "--get_comment", "no",
+            "--headless", "yes",
         ]
+        # 2026-08-30：CDP 模式下 MediaCrawler 用 httpx 访问 127.0.0.1:9222 取
+        # WebSocket 地址。若 shell 里设了 HTTP_PROXY/HTTPS_PROXY 而没有 NO_PROXY，
+        # httpx 会把本地回环也走代理，表现为 ReadTimeout → CDP 启动失败 → 回退标准
+        # 模式 → 报 chromium_headless_shell 不存在。这里显式放行回环地址。
+        child_env = os.environ.copy()
+        no_proxy = child_env.get("NO_PROXY") or child_env.get("no_proxy") or ""
+        for host in ("127.0.0.1", "localhost"):
+            if host not in no_proxy:
+                no_proxy = f"{no_proxy},{host}" if no_proxy else host
+        child_env["NO_PROXY"] = no_proxy
+        child_env["no_proxy"] = no_proxy
+
         result = subprocess.run(
             cmd, cwd=MEDIACRAWLER_DIR, timeout=600,
-            capture_output=True, text=True,
+            capture_output=True, text=True, env=child_env,
         )
         if result.returncode != 0:
             print("[错误] MediaCrawler 运行失败", file=sys.stderr)
@@ -159,8 +174,9 @@ def run_mediacrawler(keyword: str, publish_time_type: int, time_filter_active: b
         restore_configs(dy_orig, base_orig)
 
 
-def read_today_jsonl(keywords: list[str], time_filter: int) -> list[dict]:
-    """读取今天的 JSONL，合并所有关键词匹配的记录，按 time_filter 过滤发布时间。"""
+def read_today_jsonl(keywords: list[str], time_filter: int, within: int | None = None) -> list[dict]:
+    """读取今天的 JSONL，合并所有关键词匹配的记录，按 time_filter 过滤发布时间。
+    within 给定时按精确天数裁剪（抖音只有 1/7/180 天档，近 3 天要先抓 7 天档再裁）。"""
     today = date.today().isoformat()
     jsonl_path = os.path.join(JSONL_DIR, f"search_contents_{today}.jsonl")
     if not os.path.exists(jsonl_path):
@@ -175,8 +191,11 @@ def read_today_jsonl(keywords: list[str], time_filter: int) -> list[dict]:
 
     kw_lower = [k.lower() for k in keywords]
     cutoff = (TODAY_TS - TIME_FILTER_SECONDS[time_filter]) if time_filter > 0 else 0
+    if within:
+        cutoff = max(cutoff, TODAY_TS - within * 86400)
 
-    seen: set[str] = set()
+    # 同一天多次抓取会追加进同一个文件：同一条视频保留最后（最新）一次的数据，否则重查时数字停在第一次
+    latest: dict[str, dict] = {}
     records: list[dict] = []
     with open(jsonl_path) as f:
         for line in f:
@@ -191,11 +210,12 @@ def read_today_jsonl(keywords: list[str], time_filter: int) -> list[dict]:
                 if cutoff and (item.get("create_time") or 0) < cutoff:
                     continue
                 aweme_id = item.get("aweme_id")
-                if aweme_id and aweme_id not in seen:
-                    seen.add(aweme_id)
-                    records.append(item)
+                if aweme_id:
+                    latest.pop(aweme_id, None)
+                    latest[aweme_id] = item
             except json.JSONDecodeError:
                 continue
+    records.extend(latest.values())
     return records
 
 
@@ -296,6 +316,13 @@ def fmt(n: int) -> str:
     return f"{n / 10000:.1f}万" if n >= 10000 else str(n)
 
 
+def fmt_pub(ts: int) -> str:
+    """存档用：绝对时间+相对时间。只写「N小时前」的话，过几天再打开文件就不知道是哪天发的。"""
+    if not ts:
+        return "未知"
+    return f"{datetime.fromtimestamp(ts).strftime('%m-%d %H:%M')}（{fmt_days(ts)}）"
+
+
 def fmt_days(ts: int) -> str:
     if not ts:
         return "未知"
@@ -328,6 +355,18 @@ def main():
         "--time-filter", type=int, default=0, choices=[0, 1, 7, 180],
         dest="time_filter",
         help="时间过滤：0=不限（默认）, 1=1天内, 7=1周内, 180=6个月内",
+    )
+    parser.add_argument(
+        "--within", type=int, default=None,
+        help="只保留近 N 天发布的视频（精确裁剪，配合 --time-filter 抓取档使用）",
+    )
+    parser.add_argument(
+        "--exclude-uid", nargs="+", default=None, metavar="SEC_UID", dest="exclude_uid",
+        help="排除这些作者（按 sec_uid；在过滤和排名之前剔除，名额由后面的视频补上）",
+    )
+    parser.add_argument(
+        "--no-crawl", action="store_true", dest="no_crawl",
+        help="不重新抓取，只用今天 JSONL 里已有的数据排名（多关键词被限流时逐个抓完再合并用）",
     )
     parser.add_argument("--save", action="store_true", help="保存结果到 TOPIC_RANK_RESEARCH_DIR")
     parser.add_argument(
@@ -368,16 +407,24 @@ def main():
 
     time_filter_active = args.time_filter != 0
     fetch_n = 45 if time_filter_active else 15
-    for kw in args.keyword:
+    for kw in ([] if args.no_crawl else args.keyword):
         print(f"\n运行 MediaCrawler 搜索「{kw}」（时间范围：{time_label}，抓取 {fetch_n} 条）...\n")
         ok = run_mediacrawler(kw, args.time_filter, time_filter_active)
         if not ok:
             sys.exit(1)
 
-    videos = read_today_jsonl(args.keyword, args.time_filter)
+    videos = read_today_jsonl(args.keyword, args.time_filter, args.within)
     if not videos:
         print("[错误] 未从 JSONL 中找到匹配记录", file=sys.stderr)
         sys.exit(1)
+
+    excluded_names: list[str] = []
+    if args.exclude_uid:
+        ex = set(args.exclude_uid)
+        excluded_names = sorted({v.get("nickname", "") for v in videos if v.get("sec_uid") in ex})
+        before = len(videos)
+        videos = [v for v in videos if v.get("sec_uid") not in ex]
+        print(f"[排除] {before - len(videos)} 条：{'、'.join(excluded_names) or '无'}")
 
     if args.require:
         require_groups = expand_require(args.require)
@@ -394,7 +441,8 @@ def main():
     videos.sort(key=lambda x: x["score"], reverse=True)
 
     if args.llm_filter:
-        videos = llm_filter_videos(videos, args.llm_filter)
+        # 送审条数随 --top 放大，否则要 Top 30 时只有前 40 条参与筛选，筛完不够数
+        videos = llm_filter_videos(videos, args.llm_filter, candidate_n=max(40, args.top * 3))
 
     top = videos[: args.top]
 
@@ -429,7 +477,9 @@ def main():
         today = date.today().isoformat()
         kw_slug = "+".join(args.keyword[:2]) if len(args.keyword) > 1 else args.keyword[0]
         os.makedirs(RESEARCH_DIR, exist_ok=True)
-        filepath = os.path.join(RESEARCH_DIR, f"{kw_slug}-抖音-{today}.md")
+        # 文件名带时间窗口，否则同一天同关键词查 1 天和 3 天会互相覆盖
+        win = f"近{args.within}天" if args.within else time_label
+        filepath = os.path.join(RESEARCH_DIR, f"{kw_slug}-抖音-{win}-{today}.md")
         lines = [f"# {kw_display} — 抖音 — {today}",
                  f"", f"> 模式：{args.score} [{mode_tag}]  |  Top {len(top)}", ""]
         for i, v in enumerate(top, 1):
@@ -440,8 +490,10 @@ def main():
             comments = int(v.get("comment_count") or 0)
             shared = int(v.get("share_count") or 0)
             lines += [f"{i}. **{title}**  `{score_str}`",
-                      f"   赞:{fmt(liked)}  藏:{fmt(collected)}  评:{fmt(comments)}  享:{fmt(shared)}",
+                      f"   赞:{fmt(liked)}  藏:{fmt(collected)}  评:{fmt(comments)}  享:{fmt(shared)}  发布:{fmt_pub(v.get('create_time', 0))}",
                       f"   作者: {v.get('nickname', '')} → [{build_url(v)}]({build_url(v)})", ""]
+        if args.exclude_uid:
+            lines.append(f"> 已按排除名单剔除：{'、'.join(excluded_names) or '（本次没有命中）'}")
         with open(filepath, "w") as f:
             f.write("\n".join(lines))
         print(f"\n已保存：{filepath}")
