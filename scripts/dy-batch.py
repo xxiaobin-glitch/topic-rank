@@ -204,7 +204,9 @@ def main():
         a.llm = a.llm or pr.get("llm_filter")
         a.windows = a.windows or pr.get("windows")
         a.top = a.top or pr.get("top")
-        a.exclude = [e["sec_uid"] for e in pr.get("exclude", [])]
+        ex_path = os.path.join(os.path.dirname(PRESETS), "dy-exclude.json")  # 个人数据，不进 git
+        ex_all = json.load(open(ex_path)) if os.path.exists(ex_path) else {}
+        a.exclude = [e["sec_uid"] for e in ex_all.get(a.preset, [])]
     else:
         a.exclude = []
     if not a.keyword:

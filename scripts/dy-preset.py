@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-管理 data/dy-presets.json 里预设榜单的排除名单（暂时学不了、榜里不看的作者）。
+管理预设榜单的排除名单（暂时学不了、榜里不看的作者）。
+名单存 data/dy-exclude.json，按预设名分组；个人数据，和 watchlist.json 一样不进 git（仓库公开）。
 
 排除按 sec_uid（作者改昵称也对得上）；只作用于该预设的榜，watchlist 不受影响。
 
@@ -21,16 +22,19 @@ from datetime import date
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PRESETS = os.path.join(os.path.dirname(HERE), "data", "dy-presets.json")
+EXCLUDE = os.path.join(os.path.dirname(HERE), "data", "dy-exclude.json")
 JSONL_DIR = os.path.expanduser("~/Projects/MediaCrawler/data/douyin/jsonl")
 
 
-def load() -> dict:
-    with open(PRESETS) as f:
+def load_exclude() -> dict:
+    if not os.path.exists(EXCLUDE):
+        return {}
+    with open(EXCLUDE) as f:
         return json.load(f)
 
 
-def save(d: dict) -> None:
-    with open(PRESETS, "w") as f:
+def save_exclude(d: dict) -> None:
+    with open(EXCLUDE, "w") as f:
         json.dump(d, f, ensure_ascii=False, indent=2)
 
 
@@ -68,10 +72,12 @@ def main():
     p.add_argument("--reason", default="")
     a = p.parse_args()
 
-    d = load()
-    if a.preset not in d:
-        sys.exit(f"[错误] 没有预设「{a.preset}」，可选：{'、'.join(d)}")
-    ex = d[a.preset].setdefault("exclude", [])
+    with open(PRESETS) as f:
+        presets = json.load(f)
+    if a.preset not in presets:
+        sys.exit(f"[错误] 没有预设「{a.preset}」，可选：{'、'.join(presets)}")
+    d = load_exclude()
+    ex = d.setdefault(a.preset, [])
 
     if a.action == "list":
         print(f"「{a.preset}」排除名单（{len(ex)} 人）：")
@@ -88,14 +94,14 @@ def main():
         uid = a.sec_uid or find_uid(a.name)
         ex.append({"name": a.name, "sec_uid": uid, "reason": a.reason,
                    "added": date.today().isoformat()})
-        save(d)
-        print(f"已排除：{a.name}（{a.reason or '无原因'}）——之后「{a.preset}」榜不再出现他的视频")
+        save_exclude(d)
+        print(f"已排除：{a.name}（{a.reason or '无原因'}）——之后「{a.preset}」榜不再出现该作者的视频")
     else:
         kept = [e for e in ex if e["name"] != a.name]
         if len(kept) == len(ex):
             sys.exit(f"[错误] 排除名单里没有「{a.name}」")
-        d[a.preset]["exclude"] = kept
-        save(d)
+        d[a.preset] = kept
+        save_exclude(d)
         print(f"已移出排除名单：{a.name}")
 
 
